@@ -442,8 +442,8 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Sidebar */}
-      <aside className="fixed left-0 top-0 h-full w-64 bg-white border-r border-[#E1E3E1] p-6 flex flex-col gap-8 z-20">
+      {/* Sidebar - Desktop */}
+      <aside className="hidden lg:flex fixed left-0 top-0 h-full w-64 bg-white border-r border-[#E1E3E1] p-6 flex-col gap-8 z-20">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 bg-[#0061A4] rounded-xl flex items-center justify-center text-white shadow-lg shadow-blue-100">
             <RefreshCw className="w-6 h-6" />
@@ -505,6 +505,30 @@ export default function App() {
         </div>
       </aside>
 
+      {/* Mobile Navigation */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-[#E1E3E1] px-4 py-2 flex justify-around items-center z-[60] shadow-[0_-4px_10px_rgba(0,0,0,0.05)]">
+        <button onClick={() => setActiveTab('dashboard')} className={`flex flex-col items-center gap-1 p-2 ${activeTab === 'dashboard' ? 'text-blue-600' : 'text-gray-400'}`}>
+          <LayoutDashboard className="w-5 h-5" />
+          <span className="text-[10px] font-medium">Dashboard</span>
+        </button>
+        <button onClick={() => setActiveTab('timeline')} className={`flex flex-col items-center gap-1 p-2 ${activeTab === 'timeline' ? 'text-blue-600' : 'text-gray-400'}`}>
+          <Calendar className="w-5 h-5" />
+          <span className="text-[10px] font-medium">Timeline</span>
+        </button>
+        <button onClick={() => setActiveTab('table')} className={`flex flex-col items-center gap-1 p-2 ${activeTab === 'table' ? 'text-blue-600' : 'text-gray-400'}`}>
+          <FileSpreadsheet className="w-5 h-5" />
+          <span className="text-[10px] font-medium">Table</span>
+        </button>
+        <button onClick={() => setActiveTab('issues')} className={`flex flex-col items-center gap-1 p-2 ${activeTab === 'issues' ? 'text-blue-600' : 'text-gray-400'}`}>
+          <AlertCircle className="w-5 h-5" />
+          <span className="text-[10px] font-medium">Issues</span>
+        </button>
+        <button onClick={() => setShowAISidebar(!showAISidebar)} className={`flex flex-col items-center gap-1 p-2 ${showAISidebar ? 'text-blue-600' : 'text-gray-400'}`}>
+          <MessageSquare className="w-5 h-5" />
+          <span className="text-[10px] font-medium">AI</span>
+        </button>
+      </nav>
+
       {/* AI Sidebar Toggle Button (when hidden) */}
       {!showAISidebar && (
         <button 
@@ -520,10 +544,10 @@ export default function App() {
       <AnimatePresence>
         {showAISidebar && (
           <motion.aside 
-            initial={{ x: 320 }}
+            initial={{ x: 400 }}
             animate={{ x: 0 }}
-            exit={{ x: 320 }}
-            className="fixed right-0 top-0 h-full w-80 bg-white border-l border-[#E1E3E1] flex flex-col z-20 shadow-2xl"
+            exit={{ x: 400 }}
+            className="fixed right-0 top-0 h-full w-full sm:w-80 bg-white border-l border-[#E1E3E1] flex flex-col z-[70] lg:z-20 shadow-2xl"
           >
             <div className="p-6 border-b border-[#E1E3E1] flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -582,7 +606,7 @@ export default function App() {
       </AnimatePresence>
 
       {/* Main Content */}
-      <main className={`transition-all duration-300 ${showAISidebar ? 'mr-80' : 'mr-0'} ml-64 p-8 min-h-screen`}>
+      <main className={`transition-all duration-300 ${showAISidebar ? 'lg:mr-80' : 'mr-0'} lg:ml-64 p-4 lg:p-8 min-h-screen pb-24 lg:pb-8`}>
         {!process.env.GEMINI_API_KEY && (
           <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-center gap-3 text-amber-800 text-sm">
             <AlertCircle className="w-5 h-5 shrink-0" />
@@ -1207,16 +1231,16 @@ function GanttChart({ tasks, onEdit, onUpdateTask }: { tasks: NPITask[], onEdit:
           )}
 
           {/* Sticky Header */}
-          <div className="flex sticky top-0 z-50 bg-[#F8F9FA] border-b border-[#E1E3E1]">
+          <div className="flex sticky top-0 z-50 bg-[#F8F9FA] border-b border-[#E1E3E1]" style={{ width: 256 + days.length * dayWidth }}>
             <div className="w-64 sticky left-0 bg-[#F8F9FA] z-[60] p-4 font-bold text-xs border-r border-[#E1E3E1] flex items-center">
               Project / Part Number
             </div>
-            <div className="flex">
+            <div className="flex flex-none">
               {days.map((day, i) => (
                 <div 
                   key={i} 
                   id={format(day, 'yyyy-MM-dd') === format(today, 'yyyy-MM-dd') ? 'today-marker' : undefined}
-                  className={`flex flex-col items-center justify-center text-[10px] border-l border-[#F0F0F0] py-2 ${
+                  className={`flex flex-col items-center justify-center text-[10px] border-l border-[#F0F0F0] py-2 flex-none ${
                     format(day, 'yyyy-MM-dd') === format(today, 'yyyy-MM-dd') ? 'bg-red-50 font-bold text-red-600' : 'text-[#44474E]'
                   }`} 
                   style={{ width: dayWidth }}
@@ -1232,7 +1256,7 @@ function GanttChart({ tasks, onEdit, onUpdateTask }: { tasks: NPITask[], onEdit:
           <div className="divide-y divide-[#F0F0F0]">
             {validTasks.map((task) => {
               return (
-                <div key={task.id} className="flex items-center group hover:bg-gray-50/50 transition-colors">
+                <div key={task.id} className="flex items-center group hover:bg-gray-50/50 transition-colors" style={{ width: 256 + days.length * dayWidth }}>
                   <div 
                     className="w-64 sticky left-0 bg-white z-40 p-4 text-xs font-medium border-r border-[#E1E3E1] group-hover:bg-gray-50 cursor-pointer shadow-[4px_0_8px_-4px_rgba(0,0,0,0.05)]"
                     onClick={() => onEdit(task)}
@@ -1241,7 +1265,17 @@ function GanttChart({ tasks, onEdit, onUpdateTask }: { tasks: NPITask[], onEdit:
                     <div className="text-[11px] text-[#44474E] line-clamp-2 leading-tight mb-1">{task.projectDescription}</div>
                     <div className="text-[10px] text-gray-400 font-mono">{task.partNo}</div>
                   </div>
-                  <div className="relative h-20 flex-1">
+                  <div className="relative h-20 flex-none" style={{ width: days.length * dayWidth }}>
+                    {/* Vertical Grid Lines */}
+                    <div className="absolute inset-0 flex pointer-events-none">
+                      {days.map((_, i) => (
+                        <div 
+                          key={i} 
+                          className="border-l border-[#F0F0F0] h-full flex-none" 
+                          style={{ width: dayWidth }}
+                        />
+                      ))}
+                    </div>
                 {/* Milestones (Red Dots) */}
                 {Object.entries(task.milestones || {}).map(([key, date]) => {
                   if (!date) return null;
