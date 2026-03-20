@@ -40,26 +40,38 @@ export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'up
     Analyze the following data extracted from an NPI (New Product Introduction) schedule Excel file.
     Convert it into a structured JSON array of projects/parts.
     
-    Extract the following fields for each item:
+    Extract the following fields for each item, paying close attention to these specific column names in the raw data:
     - project: The main project name (e.g., "RBE300Y", "Project Alpha"). Look for codes or names that represent the overall project.
     - projectDescription: Description of the project or part tool.
     - partNo: Part number.
     - molder: Molder name.
     - odm: ODM name.
     - currentStage: Current stage of the project.
-    - latestStatus: Latest status update.
+    - latestStatus: Extract from the column named "Latest Status update".
     - startDate: The earliest date found for this item (YYYY-MM-DD).
     - endDate: The latest date found for this item (YYYY-MM-DD).
-    - milestones: Object containing dates for 'beta', 'pilotRun', 'mp', 'xf' (YYYY-MM-DD).
-    - timelinePoints: Object containing dates for 'toolingStart', 't1', 't2', 't3', 't4', 't5' (YYYY-MM-DD).
+    - milestones: Object containing dates for:
+        - beta: Extract from column "Beta" (often column AA).
+        - pilotRun: Extract from column "Pilot Run" (often column AB).
+        - mp: Extract from column "MP" (often column AC).
+        - xf: Extract from column "XF" (often column AD).
+    - timelinePoints: Object containing dates for:
+        - toolingStart: Extract from column "Tooling Start".
+        - t1: Extract from column "T1" (often column V).
+        - t2: Extract from column "T2" (often column W).
+        - t3: Extract from column "T3" (often column X).
+        - t4: Extract from column "T4" (often column Y).
+        - t5: Extract from column "T5" (often column Z).
     - issues: Array of objects with 'trial', 'description', 'status', 'severity' (if found).
 
     IMPORTANT: Ensure project names like "RBE300Y" are correctly identified and not split or ignored.
     
-    Raw Data: ${JSON.stringify(rawData.slice(0, 500))}
-    
     IMPORTANT: Process ALL rows in the raw data. Do not skip any.
-    Each item in the returned array must have a unique 'id' (you can generate a short unique string or use a combination of project and partNo).
+    Each item in the returned array must have a unique 'id'. 
+    Generate the 'id' by combining the project name, part number, and row index (e.g., "ProjectA_Part123_0"). 
+    This is CRITICAL to avoid duplicate keys in the UI.
+    
+    Raw Data: ${JSON.stringify(rawData.slice(0, 500))}
   `;
 
   try {

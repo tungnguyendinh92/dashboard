@@ -73,7 +73,18 @@ export default function App() {
       const ws = wb.Sheets[wsname];
       const data = XLSX.utils.sheet_to_json(ws);
       
-      const parsedTasks = await parseExcelDataWithAI(data);
+      const parsedTasksRaw = await parseExcelDataWithAI(data);
+      
+      // Post-process to ensure IDs are unique
+      const idSet = new Set<string>();
+      const parsedTasks = parsedTasksRaw.map((task, idx) => {
+        let uniqueId = task.id || `${task.project}_${task.partNo}_${idx}`;
+        if (idSet.has(uniqueId)) {
+          uniqueId = `${uniqueId}_${idx}_${Date.now()}`;
+        }
+        idSet.add(uniqueId);
+        return { ...task, id: uniqueId };
+      });
       
       if (mode === 'replace') {
         setPrevTasks(tasks);
@@ -535,7 +546,7 @@ export default function App() {
                 className="bg-white rounded-3xl border border-[#E1E3E1] shadow-sm overflow-hidden"
               >
                 <div className="overflow-auto max-h-[75vh] relative">
-                  <table className="w-full text-left border-collapse min-w-[2000px]">
+                  <table className="w-full text-left border-collapse min-w-[2800px]">
                     <thead className="bg-[#F0F4F8] sticky top-0 z-20">
                       <tr>
                         <th className="p-4 font-semibold text-sm sticky left-0 bg-[#F0F4F8] z-30 border-r border-[#E1E3E1] w-64">Project / Part Name</th>
@@ -544,11 +555,16 @@ export default function App() {
                         <th className="p-4 font-semibold text-sm w-48">ODM</th>
                         <th className="p-4 font-semibold text-sm w-48">Stage</th>
                         <th className="p-4 font-semibold text-sm w-96">Status / Issues</th>
+                        <th className="p-4 font-semibold text-sm w-32">Tooling Start</th>
                         <th className="p-4 font-semibold text-sm w-32">T1</th>
                         <th className="p-4 font-semibold text-sm w-32">T2</th>
                         <th className="p-4 font-semibold text-sm w-32">T3</th>
                         <th className="p-4 font-semibold text-sm w-32">T4</th>
                         <th className="p-4 font-semibold text-sm w-32">T5</th>
+                        <th className="p-4 font-semibold text-sm w-32">Beta</th>
+                        <th className="p-4 font-semibold text-sm w-32">Pilot Run</th>
+                        <th className="p-4 font-semibold text-sm w-32">MP</th>
+                        <th className="p-4 font-semibold text-sm w-32">XF</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -603,12 +619,22 @@ export default function App() {
                               className="bg-transparent border-none outline-none w-full whitespace-normal break-words min-h-[60px] resize-y"
                             />
                           </td>
-                          {['t1', 't2', 't3', 't4', 't5'].map(t => (
+                          {['toolingStart', 't1', 't2', 't3', 't4', 't5'].map(t => (
                             <td key={t} className="p-4 text-xs">
                               <input 
                                 type="date"
                                 value={(task.timelinePoints as any)[t] || ''} 
                                 onChange={(e) => handleTableEdit(task.id, `timelinePoints.${t}`, e.target.value)}
+                                className="bg-transparent border-none outline-none w-full"
+                              />
+                            </td>
+                          ))}
+                          {['beta', 'pilotRun', 'mp', 'xf'].map(m => (
+                            <td key={m} className="p-4 text-xs">
+                              <input 
+                                type="date"
+                                value={(task.milestones as any)[m] || ''} 
+                                onChange={(e) => handleTableEdit(task.id, `milestones.${m}`, e.target.value)}
                                 className="bg-transparent border-none outline-none w-full"
                               />
                             </td>
