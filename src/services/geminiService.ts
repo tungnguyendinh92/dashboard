@@ -4,13 +4,13 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 export interface NPITask {
   id: string;
+  project: string; // Grouping key
   projectDescription: string;
   partNo: string;
   molder: string;
   odm: string;
   currentStage: string;
   latestStatus: string;
-  // For Gantt/Timeline, we still need a primary start/end or a list of milestones
   startDate: string; 
   endDate: string;
   milestones: {
@@ -24,16 +24,24 @@ export interface NPITask {
     t1?: string;
     t2?: string;
     t3?: string;
+    t4?: string;
+    t5?: string;
   };
-  progress: number;
+  issues?: {
+    trial: string;
+    description: string;
+    status: 'open' | 'closed';
+    severity: 'low' | 'medium' | 'high';
+  }[];
 }
 
-export const parseExcelDataWithAI = async (rawData: any[]) => {
+export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'update' = 'replace') => {
   const prompt = `
     Analyze the following data extracted from an NPI (New Product Introduction) schedule Excel file.
     Convert it into a structured JSON array of projects/parts.
     
     Extract the following fields for each item:
+    - project: The main project name (usually the first column).
     - projectDescription: Description of the project or part tool.
     - partNo: Part number.
     - molder: Molder name.
@@ -43,8 +51,8 @@ export const parseExcelDataWithAI = async (rawData: any[]) => {
     - startDate: The earliest date found for this item (YYYY-MM-DD).
     - endDate: The latest date found for this item (YYYY-MM-DD).
     - milestones: Object containing dates for 'beta', 'pilotRun', 'mp', 'xf' (YYYY-MM-DD).
-    - timelinePoints: Object containing dates for 'toolingStart', 't1', 't2', 't3' (YYYY-MM-DD).
-    - progress: Estimated progress percentage (0-100).
+    - timelinePoints: Object containing dates for 'toolingStart', 't1', 't2', 't3', 't4', 't5' (YYYY-MM-DD).
+    - issues: Array of objects with 'trial', 'description', 'status', 'severity' (if found).
 
     Raw Data: ${JSON.stringify(rawData.slice(0, 50))}
   `;
@@ -61,6 +69,7 @@ export const parseExcelDataWithAI = async (rawData: any[]) => {
             type: Type.OBJECT,
             properties: {
               id: { type: Type.STRING },
+              project: { type: Type.STRING },
               projectDescription: { type: Type.STRING },
               partNo: { type: Type.STRING },
               molder: { type: Type.STRING },
@@ -84,12 +93,25 @@ export const parseExcelDataWithAI = async (rawData: any[]) => {
                   toolingStart: { type: Type.STRING },
                   t1: { type: Type.STRING },
                   t2: { type: Type.STRING },
-                  t3: { type: Type.STRING }
+                  t3: { type: Type.STRING },
+                  t4: { type: Type.STRING },
+                  t5: { type: Type.STRING }
                 }
               },
-              progress: { type: Type.NUMBER }
+              issues: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    trial: { type: Type.STRING },
+                    description: { type: Type.STRING },
+                    status: { type: Type.STRING, enum: ['open', 'closed'] },
+                    severity: { type: Type.STRING, enum: ['low', 'medium', 'high'] }
+                  }
+                }
+              }
             },
-            required: ['id', 'projectDescription', 'partNo', 'startDate', 'endDate', 'progress']
+            required: ['id', 'project', 'projectDescription', 'partNo', 'startDate', 'endDate']
           }
         }
       }
@@ -107,6 +129,16 @@ export const askAIAboutSchedule = async (tasks: NPITask[], question: string) => 
     You are an expert NPI Project Manager. Below is the current NPI schedule data.
     Answer the user's question based on this data. Be concise and professional.
     
+    If the user asks to modify data (e.g., "Change T1 of Project X to 2024-05-01"), 
+    you must return a JSON object in your response with the following structure:
+    {
+      "answer": "Your human-like response here",
+      "updates": [
+        { "id": "task-id", "field": "path.to.field", "value": "new-value" }
+      ]
+    }
+    Otherwise, just return your text answer.
+
     Schedule Data: ${JSON.stringify(tasks)}
     
     Question: ${question}
@@ -117,9 +149,14 @@ export const askAIAboutSchedule = async (tasks: NPITask[], question: string) => 
       model: "gemini-3-flash-preview",
       contents: prompt,
     });
-    return response.text;
+    
+    try {
+      return JSON.parse(response.text);
+    } catch {
+      return { answer: response.text };
+    }
   } catch (error) {
     console.error("AI Question Error:", error);
-    return "Sorry, I couldn't process that question.";
+    return { answer: "Sorry, I couldn't process that question." };
   }
 };
