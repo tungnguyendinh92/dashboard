@@ -26,6 +26,7 @@ export default function App() {
   const [googleSheetUrl, setGoogleSheetUrl] = useState('');
   const [googleScriptUrl, setGoogleScriptUrl] = useState('');
   const [showSettings, setShowSettings] = useState(false);
+  const [showAISidebar, setShowAISidebar] = useState(true);
   const [filterText, setFilterText] = useState('');
   const [projectNotes, setProjectNotes] = useState<Record<string, string>>({});
   const [editingTask, setEditingTask] = useState<NPITask | null>(null);
@@ -125,19 +126,22 @@ export default function App() {
     
     const aiResponse = await askAIAboutSchedule(tasks, userMsg);
     
-    if (aiResponse.updates) {
+    if (aiResponse.updates && aiResponse.updates.length > 0) {
       setTasks(prev => {
         const next = [...prev];
         aiResponse.updates.forEach((update: any) => {
           const taskIndex = next.findIndex(t => t.id === update.id);
           if (taskIndex > -1) {
+            // Clone the task object to ensure re-render
+            const updatedTask = { ...next[taskIndex] };
             const keys = update.field.split('.');
-            let obj: any = next[taskIndex];
+            let obj: any = updatedTask;
             for (let i = 0; i < keys.length - 1; i++) {
-              if (!obj[keys[i]]) obj[keys[i]] = {};
+              obj[keys[i]] = { ...obj[keys[i]] };
               obj = obj[keys[i]];
             }
             obj[keys[keys.length - 1]] = update.value;
+            next[taskIndex] = updatedTask;
           }
         });
         return next;
@@ -145,6 +149,27 @@ export default function App() {
     }
 
     setChatHistory(prev => [...prev, { role: 'ai', content: aiResponse.answer }]);
+    speak(aiResponse.answer);
+  };
+
+  const speak = (text: string) => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      window.speechSynthesis.speak(utterance);
+    }
+  };
+
+  const clearData = () => {
+    if (window.confirm("Are you sure you want to clear all data? This cannot be undone.")) {
+      setTasks([]);
+      setPrevTasks([]);
+      setProjectNotes({});
+      localStorage.removeItem('npi_tasks');
+      localStorage.removeItem('project_notes');
+    }
   };
 
   const handleTableEdit = (taskId: string, field: string, value: string) => {
@@ -250,50 +275,85 @@ export default function App() {
             <Settings className="w-5 h-5" />
             Settings
           </button>
+          <button 
+            onClick={clearData}
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-red-600 hover:bg-red-50 transition-all font-medium"
+          >
+            <AlertCircle className="w-5 h-5" />
+            Clear All Data
+          </button>
         </div>
       </aside>
+
+      {/* AI Sidebar Toggle Button (when hidden) */}
+      {!showAISidebar && (
+        <button 
+          onClick={() => setShowAISidebar(true)}
+          className="fixed right-0 top-1/2 -translate-y-1/2 bg-[#0061A4] text-white p-3 rounded-l-2xl z-30 shadow-xl hover:pr-6 transition-all"
+          title="Show AI Assistant"
+        >
+          <MessageSquare className="w-6 h-6" />
+        </button>
+      )}
 
       {/* AI Sidebar */}
-      <aside className="fixed right-0 top-0 h-full w-80 bg-white border-l border-[#E1E3E1] flex flex-col z-20">
-        <div className="p-6 border-b border-[#E1E3E1] flex items-center gap-3">
-          <MessageSquare className="w-5 h-5 text-blue-600" />
-          <h3 className="font-bold">AI Assistant</h3>
-        </div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {chatHistory.length === 0 && (
-            <div className="text-center mt-10 text-gray-400 text-sm">
-              Ask me to analyze or modify the schedule.
+      <AnimatePresence>
+        {showAISidebar && (
+          <motion.aside 
+            initial={{ x: 320 }}
+            animate={{ x: 0 }}
+            exit={{ x: 320 }}
+            className="fixed right-0 top-0 h-full w-80 bg-white border-l border-[#E1E3E1] flex flex-col z-20 shadow-2xl"
+          >
+            <div className="p-6 border-b border-[#E1E3E1] flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <MessageSquare className="w-5 h-5 text-blue-600" />
+                <h3 className="font-bold">AI Assistant</h3>
+              </div>
+              <button 
+                onClick={() => setShowAISidebar(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg text-gray-400"
+              >
+                <ChevronRight className="w-5 h-5" />
+              </button>
             </div>
-          )}
-          {chatHistory.map((msg, i) => (
-            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[90%] p-3 rounded-2xl text-sm ${
-                msg.role === 'user' ? 'bg-[#E3F2FD] text-[#0D47A1]' : 'bg-[#F0F4F8] text-[#1A1C1E]'
-              }`}>
-                <ReactMarkdown>{msg.content}</ReactMarkdown>
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {chatHistory.length === 0 && (
+                <div className="text-center mt-10 text-gray-400 text-sm">
+                  Ask me to analyze or modify the schedule.
+                </div>
+              )}
+              {chatHistory.map((msg, i) => (
+                <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[90%] p-3 rounded-2xl text-sm ${
+                    msg.role === 'user' ? 'bg-[#E3F2FD] text-[#0D47A1]' : 'bg-[#F0F4F8] text-[#1A1C1E]'
+                  }`}>
+                    <ReactMarkdown>{msg.content}</ReactMarkdown>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="p-4 border-t border-[#E1E3E1]">
+              <div className="flex gap-2">
+                <input 
+                  type="text" 
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && handleChat()}
+                  placeholder="Ask AI..."
+                  className="flex-1 bg-[#F0F4F8] border-none rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+                <button onClick={handleChat} className="bg-[#0061A4] text-white p-2 rounded-xl">
+                  <Send className="w-5 h-5" />
+                </button>
               </div>
             </div>
-          ))}
-        </div>
-        <div className="p-4 border-t border-[#E1E3E1]">
-          <div className="flex gap-2">
-            <input 
-              type="text" 
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleChat()}
-              placeholder="Ask AI..."
-              className="flex-1 bg-[#F0F4F8] border-none rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-            />
-            <button onClick={handleChat} className="bg-[#0061A4] text-white p-2 rounded-xl">
-              <Send className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
-      </aside>
+          </motion.aside>
+        )}
+      </AnimatePresence>
 
       {/* Main Content */}
-      <main className="ml-64 mr-80 p-8 min-h-screen">
+      <main className={`transition-all duration-300 ${showAISidebar ? 'mr-80' : 'mr-0'} ml-64 p-8 min-h-screen`}>
         <header className="flex flex-col gap-6 mb-8">
           <div className="flex justify-between items-center">
             <div>
@@ -430,7 +490,7 @@ export default function App() {
                             placeholder="Add project notes, risks, or updates..."
                             value={projectNotes[projectName] || ''}
                             onChange={(e) => handleNoteChange(projectName, e.target.value)}
-                            className="w-full min-h-[120px] bg-[#F8F9FA] border border-[#E1E3E1] rounded-2xl p-4 text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-y shadow-inner"
+                            className="w-full min-h-[120px] bg-[#F8F9FA] border border-[#E1E3E1] rounded-2xl p-4 text-sm focus:ring-2 focus:ring-blue-500 outline-none resize shadow-inner"
                           />
                         </div>
                       </div>
@@ -458,7 +518,7 @@ export default function App() {
                     Go to Today
                   </button>
                 </div>
-                <div className="overflow-x-auto custom-scrollbar-top" ref={timelineRef}>
+                <div className="overflow-auto max-h-[70vh] custom-scrollbar-top relative" ref={timelineRef}>
                   <GanttChart tasks={filteredTasks} onEdit={setEditingTask} onUpdateTask={(updatedTask) => {
                     setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
                   }} />
@@ -474,11 +534,11 @@ export default function App() {
                 exit={{ opacity: 0 }}
                 className="bg-white rounded-3xl border border-[#E1E3E1] shadow-sm overflow-hidden"
               >
-                <div className="overflow-x-auto">
+                <div className="overflow-auto max-h-[75vh] relative">
                   <table className="w-full text-left border-collapse min-w-[2000px]">
-                    <thead className="bg-[#F0F4F8]">
+                    <thead className="bg-[#F0F4F8] sticky top-0 z-20">
                       <tr>
-                        <th className="p-4 font-semibold text-sm sticky left-0 bg-[#F0F4F8] z-10 border-r border-[#E1E3E1] w-64">Project / Part Name</th>
+                        <th className="p-4 font-semibold text-sm sticky left-0 bg-[#F0F4F8] z-30 border-r border-[#E1E3E1] w-64">Project / Part Name</th>
                         <th className="p-4 font-semibold text-sm w-48">Part No</th>
                         <th className="p-4 font-semibold text-sm w-48">Molder</th>
                         <th className="p-4 font-semibold text-sm w-48">ODM</th>
@@ -570,37 +630,78 @@ export default function App() {
                 className="space-y-6"
               >
                 <div className="bg-white rounded-3xl border border-[#E1E3E1] shadow-sm overflow-hidden">
-                  <div className="p-6 border-b border-[#E1E3E1]">
-                    <h3 className="text-lg font-bold">Issue List (Latest Trial)</h3>
+                  <div className="p-6 border-b border-[#E1E3E1] flex justify-between items-center">
+                    <h3 className="text-lg font-bold">Issue List (Extracted from Status)</h3>
+                    <div className="text-xs text-gray-400">
+                      Scanning for: delay, issue, problem, fail, ng
+                    </div>
                   </div>
                   <div className="p-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {filteredTasks.filter(t => {
-                        const status = (t.latestStatus || '').toLowerCase();
-                        return status.includes('delay') || status.includes('issue') || status.includes('problem') || status.includes('fail') || status.includes('ng');
-                      }).map((task, i) => (
-                        <div key={i} className="p-4 bg-gray-50 rounded-2xl border border-[#E1E3E1]">
-                          <div className="flex justify-between items-start mb-2">
-                            <span className="px-2 py-1 bg-red-100 text-red-700 rounded-lg text-[10px] font-bold uppercase">
-                              {task.project}
-                            </span>
-                            <span className="text-[10px] font-bold uppercase text-red-600">
-                              HIGH
-                            </span>
+                    <div className="grid grid-cols-1 gap-4">
+                      {filteredTasks.flatMap(task => {
+                        const status = (task.latestStatus || '').toLowerCase();
+                        const keywords = ['delay', 'issue', 'problem', 'fail', 'ng'];
+                        
+                        // Split status by lines or bullets to find individual issues
+                        const lines = (task.latestStatus || '').split(/\n|;|\./).filter(l => l.trim().length > 5);
+                        
+                        return lines.filter(line => 
+                          keywords.some(k => line.toLowerCase().includes(k))
+                        ).map((issueLine, idx) => ({
+                          task,
+                          issueLine,
+                          id: `${task.id}-${idx}`
+                        }));
+                      }).map(({ task, issueLine, id }) => (
+                        <div key={id} className="p-6 bg-white rounded-3xl border border-[#E1E3E1] flex flex-col md:flex-row gap-6 items-start hover:shadow-md transition-shadow">
+                          <div className="md:w-72 shrink-0">
+                            <div className="flex flex-wrap gap-2 mb-2">
+                              <span className="px-2 py-1 bg-blue-50 text-blue-700 rounded-lg text-[10px] font-bold uppercase border border-blue-100">
+                                {task.project}
+                              </span>
+                              <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded-lg text-[10px] font-bold uppercase">
+                                {task.partNo}
+                              </span>
+                              <span className="px-2 py-1 bg-amber-50 text-amber-700 rounded-lg text-[10px] font-bold uppercase">
+                                {task.currentStage}
+                              </span>
+                            </div>
+                            <h4 className="font-bold text-sm text-[#1A1C1E] line-clamp-2">{task.projectDescription}</h4>
+                            <div className="mt-2 flex items-center gap-2 text-[10px] text-gray-400">
+                              <Clock className="w-3 h-3" />
+                              Updated: {format(new Date(), 'MMM dd, yyyy')}
+                            </div>
                           </div>
-                          <p className="text-sm font-medium mb-2">{task.latestStatus}</p>
-                          <div className="flex items-center gap-2">
-                            <div className="w-2 h-2 rounded-full bg-red-500"></div>
-                            <span className="text-xs text-gray-500 capitalize">Open</span>
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-3">
+                              <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
+                              <span className="text-xs font-bold text-red-600 uppercase tracking-wider">Detected Issue</span>
+                            </div>
+                            <div className="text-sm text-[#44474E] leading-relaxed bg-gray-50 p-4 rounded-2xl border border-[#F0F0F0] italic">
+                              "{issueLine.trim()}"
+                            </div>
+                          </div>
+                          <div className="md:w-32 shrink-0 flex flex-col gap-2 self-center">
+                            <button className="w-full py-2.5 bg-white border border-[#E1E3E1] rounded-xl text-xs font-bold hover:bg-gray-50 transition-colors shadow-sm">
+                              Assign
+                            </button>
+                            <button className="w-full py-2.5 bg-[#0061A4] text-white rounded-xl text-xs font-bold hover:bg-[#004A7D] transition-colors shadow-lg shadow-blue-100">
+                              Resolve
+                            </button>
                           </div>
                         </div>
                       ))}
+                      
                       {filteredTasks.every(t => {
                         const status = (t.latestStatus || '').toLowerCase();
                         return !(status.includes('delay') || status.includes('issue') || status.includes('problem') || status.includes('fail') || status.includes('ng'));
                       }) && (
-                        <div className="col-span-full text-center py-10 text-gray-400">
-                          No issues detected in status updates.
+                        <div className="col-span-full text-center py-20 text-gray-400 flex flex-col items-center gap-4">
+                          <div className="w-20 h-20 bg-emerald-50 rounded-full flex items-center justify-center">
+                            <CheckCircle2 className="w-10 h-10 text-emerald-500" />
+                          </div>
+                          <h4 className="text-lg font-bold text-[#1A1C1E]">All Clear!</h4>
+                          <p>No critical issues detected in status updates.</p>
                         </div>
                       )}
                     </div>
@@ -808,10 +909,10 @@ function GanttChart({ tasks, onEdit, onUpdateTask }: { tasks: NPITask[], onEdit:
   };
 
   return (
-    <div className="min-w-max">
-      <div className="flex border-b border-[#E1E3E1] mb-4 relative sticky top-0 bg-white z-30">
+    <div className="min-w-max relative">
+      <div className="flex border-b border-[#E1E3E1] mb-4 sticky top-0 bg-white z-30 shadow-sm">
         <div className="w-64 sticky left-0 bg-white z-40 p-2 font-bold text-sm border-r border-[#E1E3E1]">Project/Part</div>
-        <div className="flex">
+        <div className="flex bg-white">
           {days.map((day, i) => (
             <div 
               key={i} 
@@ -836,7 +937,7 @@ function GanttChart({ tasks, onEdit, onUpdateTask }: { tasks: NPITask[], onEdit:
           </div>
         )}
       </div>
-      <div className="space-y-4">
+      <div className="space-y-4 pb-4">
         {validTasks.map((task) => {
           return (
             <div key={task.id} className="flex items-center group">
@@ -845,7 +946,7 @@ function GanttChart({ tasks, onEdit, onUpdateTask }: { tasks: NPITask[], onEdit:
                 onClick={() => onEdit(task)}
               >
                 <div className="font-bold text-blue-600">{task.project}</div>
-                <div className="text-[10px] text-gray-500">{task.projectDescription}</div>
+                <div className="text-[10px] text-gray-500 line-clamp-1">{task.projectDescription}</div>
                 <div className="text-[10px] opacity-50">{task.partNo}</div>
               </div>
               <div className="relative h-16 flex-1">

@@ -56,7 +56,10 @@ export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'up
 
     IMPORTANT: Ensure project names like "RBE300Y" are correctly identified and not split or ignored.
     
-    Raw Data: ${JSON.stringify(rawData.slice(0, 50))}
+    Raw Data: ${JSON.stringify(rawData.slice(0, 500))}
+    
+    IMPORTANT: Process ALL rows in the raw data. Do not skip any.
+    Each item in the returned array must have a unique 'id' (you can generate a short unique string or use a combination of project and partNo).
   `;
 
   try {
@@ -139,7 +142,14 @@ export const askAIAboutSchedule = async (tasks: NPITask[], question: string) => 
         { "id": "task-id", "field": "path.to.field", "value": "new-value" }
       ]
     }
-    Otherwise, just return your text answer.
+    IMPORTANT: The "field" must be a valid path in the task object, e.g., "project", "latestStatus", "timelinePoints.t1", "milestones.mp".
+    Ensure you use the correct "id" from the schedule data.
+    
+    If the user is just asking a question, you should still return a JSON object with "answer" field and an empty "updates" array.
+    {
+      "answer": "Your response here",
+      "updates": []
+    }
 
     Schedule Data: ${JSON.stringify(tasks)}
     
@@ -150,15 +160,14 @@ export const askAIAboutSchedule = async (tasks: NPITask[], question: string) => 
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+      }
     });
     
-    try {
-      return JSON.parse(response.text);
-    } catch {
-      return { answer: response.text };
-    }
+    return JSON.parse(response.text);
   } catch (error) {
     console.error("AI Question Error:", error);
-    return { answer: "Sorry, I couldn't process that question." };
+    return { answer: "Sorry, I couldn't process that question.", updates: [] };
   }
 };
