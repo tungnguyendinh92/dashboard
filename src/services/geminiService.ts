@@ -1,7 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
-
 export interface NPITask {
   id: string;
   project: string; // Grouping key
@@ -36,10 +34,13 @@ export interface NPITask {
 }
 
 export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'update' = 'replace') => {
-  if (!process.env.GEMINI_API_KEY) {
-    throw new Error("Gemini API Key is not configured. Please add it in Settings.");
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("Gemini API Key is not configured. Please add it to your environment variables (GEMINI_API_KEY).");
   }
 
+  const ai = new GoogleGenAI({ apiKey });
+  
   // Slice to avoid token limits, but keep enough for context
   const sampleData = rawData.slice(0, 800);
 
@@ -144,8 +145,10 @@ export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'up
     });
 
     const response = (await Promise.race([generatePromise, timeoutPromise])) as any;
+    const text = response.text;
+    if (!text) throw new Error("AI returned an empty response during parsing.");
 
-    return JSON.parse(response.text) as NPITask[];
+    return JSON.parse(text) as NPITask[];
   } catch (error) {
     console.error("AI Parsing Error:", error);
     return [];
@@ -153,6 +156,16 @@ export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'up
 };
 
 export const askAIAboutSchedule = async (tasks: NPITask[], question: string) => {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return { 
+      answer: "Gemini API Key is missing. Please add GEMINI_API_KEY to your environment variables.", 
+      updates: [] 
+    };
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
+
   const prompt = `
     You are an expert NPI Project Manager. Below is the current NPI schedule data.
     Answer the user's question based on this data. Be concise and professional.
@@ -188,9 +201,15 @@ export const askAIAboutSchedule = async (tasks: NPITask[], question: string) => 
       }
     });
     
-    return JSON.parse(response.text);
-  } catch (error) {
+    const text = response.text;
+    if (!text) throw new Error("AI returned an empty response.");
+    
+    return JSON.parse(text);
+  } catch (error: any) {
     console.error("AI Question Error:", error);
-    return { answer: "Sorry, I couldn't process that question.", updates: [] };
+    return { 
+      answer: `Sorry, I couldn't process that question. ${error?.message || "Unknown error"}`, 
+      updates: [] 
+    };
   }
 };
