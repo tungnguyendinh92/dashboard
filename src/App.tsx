@@ -68,13 +68,20 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
-        const bstr = evt.target?.result;
-        const wb = XLSX.read(bstr, { type: 'binary' });
+        const data = evt.target?.result;
+        if (!data) throw new Error("No data read from file");
+        
+        const wb = XLSX.read(data, { type: 'array' });
         const wsname = wb.SheetNames[0];
         const ws = wb.Sheets[wsname];
-        const data = XLSX.utils.sheet_to_json(ws);
+        const jsonData = XLSX.utils.sheet_to_json(ws);
         
-        const parsedTasksRaw = await parseExcelDataWithAI(data);
+        if (jsonData.length === 0) {
+          alert("The Excel file seems to be empty.");
+          return;
+        }
+
+        const parsedTasksRaw = await parseExcelDataWithAI(jsonData);
         
         // Post-process to ensure IDs are unique
         const idSet = new Set<string>();
@@ -106,7 +113,7 @@ export default function App() {
         }
       } catch (error) {
         console.error("File upload error:", error);
-        alert("Failed to process file. Please ensure it's a valid Excel file.");
+        alert("Failed to process file. Please ensure it's a valid Excel file and your Gemini API Key is configured.");
       } finally {
         setLoading(false);
       }
@@ -115,7 +122,61 @@ export default function App() {
       setLoading(false);
       alert("Failed to read file.");
     };
-    reader.readAsBinaryString(file);
+    reader.readAsArrayBuffer(file);
+  };
+
+  const exportData = () => {
+    const dataStr = JSON.stringify(tasks, null, 2);
+    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+    const exportFileDefaultName = `npi_data_${format(new Date(), 'yyyyMMdd_HHmm')}.json`;
+    const linkElement = document.createElement('a');
+    linkElement.setAttribute('href', dataUri);
+    linkElement.setAttribute('download', exportFileDefaultName);
+    linkElement.click();
+  };
+
+  const importData = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const content = evt.target?.result as string;
+        const importedTasks = JSON.parse(content);
+        if (Array.isArray(importedTasks)) {
+          setTasks(importedTasks);
+          alert("Data imported successfully!");
+        } else {
+          alert("Invalid data format. Expected an array of tasks.");
+        }
+      } catch (error) {
+        console.error("Import Error:", error);
+        alert("Failed to import data. Please ensure it's a valid JSON file.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const addSampleData = () => {
+    const sampleTasks: NPITask[] = [
+      {
+        id: 'sample-1',
+        project: 'Project Alpha',
+        projectDescription: 'Main Chassis Tooling',
+        partNo: 'CH-001',
+        molder: 'Molder A',
+        odm: 'ODM X',
+        currentStage: 'T1',
+        latestStatus: 'On track',
+        startDate: format(new Date(), 'yyyy-MM-dd'),
+        endDate: format(addDays(new Date(), 90), 'yyyy-MM-dd'),
+        milestones: { beta: format(addDays(new Date(), 30), 'yyyy-MM-dd') },
+        timelinePoints: { toolingStart: format(new Date(), 'yyyy-MM-dd'), t1: format(addDays(new Date(), 15), 'yyyy-MM-dd') }
+      }
+    ];
+    setTasks(sampleTasks);
+    alert("Sample data added!");
   };
 
   const filteredTasks = tasks.filter(t => 
@@ -227,23 +288,52 @@ export default function App() {
   };
 
   const uploadToGoogleSheet = async () => {
-    if (!googleSheetUrl || !googleScriptUrl) {
-      alert("Please set both Google Sheet URL and Script URL in Settings first.");
+    if (!googleScriptUrl) {
+      alert("Please set your Google Apps Script URL in Settings first.");
       setShowSettings(true);
       return;
     }
     
     setLoading(true);
     try {
-      // In a real app, this would call the Google Apps Script.
-      // We simulate a fetch to the script URL.
-      // await fetch(googleScriptUrl, { method: 'POST', body: JSON.stringify(tasks) });
+      const response = await fetch(googleScriptUrl, {
+        method: 'POST',
+        mode: 'no-cors', // Apps Script often requires no-cors for simple POST
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'upload', data: tasks })
+      });
       
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      alert("Data successfully pushed to Google Sheet via Apps Script!");
+      // Since no-cors doesn't return body, we assume success if no error thrown
+      alert("Data sent to Google Apps Script! (Note: ensure your script is deployed as a Web App with 'Anyone' access)");
     } catch (error) {
       console.error("Upload Error:", error);
-      alert("Failed to upload to Google Sheet. Check your Script URL.");
+      alert("Failed to connect to Google Apps Script. Check your URL and CORS settings.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchFromGoogleSheet = async () => {
+    if (!googleScriptUrl) {
+      alert("Please set your Google Apps Script URL in Settings first.");
+      setShowSettings(true);
+      return;
+    }
+    
+    setLoading(true);
+    try {
+      const response = await fetch(`${googleScriptUrl}?action=download`);
+      if (!response.ok) throw new Error("Network response was not ok");
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        setTasks(data);
+        alert("Data synced from Google Sheet!");
+      } else {
+        alert("Received invalid data format from script.");
+      }
+    } catch (error) {
+      console.error("Fetch Error:", error);
+      alert("Failed to fetch data. Ensure your script handles GET requests and returns JSON.");
     } finally {
       setLoading(false);
     }
@@ -265,6 +355,24 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-[#1A1C1E] font-sans">
+      {/* Loading Overlay */}
+      <AnimatePresence>
+        {loading && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-white/80 backdrop-blur-sm z-[100] flex flex-col items-center justify-center gap-4"
+          >
+            <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+            <div className="text-center">
+              <p className="font-bold text-lg text-[#1A1C1E]">Processing Data with AI...</p>
+              <p className="text-sm text-[#44474E]">This may take up to 30 seconds for large files.</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Sidebar */}
       <aside className="fixed left-0 top-0 h-full w-64 bg-white border-r border-[#E1E3E1] p-6 flex flex-col gap-8 z-20">
         <div className="flex items-center gap-3">
@@ -282,12 +390,34 @@ export default function App() {
         </nav>
 
         <div className="mt-auto space-y-2 pt-6 border-t border-[#E1E3E1]">
+          <div className="grid grid-cols-2 gap-2">
+            <button 
+              onClick={exportData}
+              className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-medium bg-gray-50 hover:bg-gray-100 text-gray-600 transition-all"
+              title="Export data to JSON file"
+            >
+              <Share2 className="w-4 h-4" />
+              Export
+            </button>
+            <label className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-medium bg-gray-50 hover:bg-gray-100 text-gray-600 transition-all cursor-pointer" title="Import data from JSON file">
+              <Upload className="w-4 h-4" />
+              Import
+              <input type="file" accept=".json" onChange={importData} className="hidden" />
+            </label>
+          </div>
+          <button 
+            onClick={fetchFromGoogleSheet}
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-emerald-700 bg-emerald-50 hover:bg-emerald-100 transition-all font-medium"
+          >
+            <RefreshCw className="w-5 h-5" />
+            Sync from Sheet
+          </button>
           <button 
             onClick={uploadToGoogleSheet}
             className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-blue-700 bg-blue-50 hover:bg-blue-100 transition-all font-medium"
           >
             <Share2 className="w-5 h-5" />
-            Upload to Sheet
+            Push to Sheet
           </button>
           <button 
             onClick={() => setShowSettings(true)}
@@ -382,6 +512,12 @@ export default function App() {
               <p className="text-[#44474E]">Grouped by Projects & Trials.</p>
             </div>
             <div className="flex gap-3">
+              <button 
+                onClick={addSampleData}
+                className="flex items-center gap-2 bg-gray-100 text-gray-700 px-4 py-2 rounded-xl text-sm font-semibold hover:bg-gray-200 transition-all"
+              >
+                Add Sample Data
+              </button>
               <label className="flex items-center gap-2 bg-[#0061A4] text-white px-4 py-2 rounded-xl text-sm font-semibold cursor-pointer hover:bg-[#004A7D] transition-all shadow-lg shadow-blue-100">
                 <RefreshCw className="w-4 h-4" />
                 Replace Data
@@ -527,19 +663,31 @@ export default function App() {
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
-                className="bg-white p-6 rounded-3xl border border-[#E1E3E1] shadow-sm"
+                className="bg-white rounded-3xl border border-[#E1E3E1] shadow-sm overflow-hidden"
               >
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="font-bold">NPI Timeline</h3>
-                  <button 
-                    onClick={scrollToToday}
-                    className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 rounded-xl text-sm font-bold hover:bg-red-100 transition-all"
-                  >
-                    <Clock className="w-4 h-4" />
-                    Go to Today
-                  </button>
+                <div className="p-6 border-b border-[#E1E3E1] flex justify-between items-center bg-white sticky top-0 z-50">
+                  <div className="flex items-center gap-4">
+                    <h3 className="text-lg font-bold">NPI Timeline</h3>
+                    <button 
+                      onClick={scrollToToday}
+                      className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-700 rounded-xl text-xs font-bold hover:bg-blue-100 transition-all border border-blue-100"
+                    >
+                      <Clock className="w-4 h-4" />
+                      Go to Today
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-4 text-xs">
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 rounded-full bg-red-500"></div>
+                      <span className="text-gray-500">Milestones</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+                      <span className="text-gray-500">Timeline Points</span>
+                    </div>
+                  </div>
                 </div>
-                <div className="overflow-auto max-h-[70vh] custom-scrollbar-top relative" ref={timelineRef}>
+                <div className="overflow-hidden" ref={timelineRef}>
                   <GanttChart tasks={filteredTasks} onEdit={setEditingTask} onUpdateTask={(updatedTask) => {
                     setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
                   }} />
@@ -945,49 +1093,55 @@ function GanttChart({ tasks, onEdit, onUpdateTask }: { tasks: NPITask[], onEdit:
   };
 
   return (
-    <div className="min-w-max relative">
-      {/* Today Marker Line - Spans entire height */}
-      {isWithinInterval(today, { start: minDate, end: maxDate }) && (
-        <div 
-          className="absolute top-0 bottom-0 w-[2px] bg-red-500 z-20 pointer-events-none animate-pulse"
-          style={{ left: 256 + (differenceInDays(today, minDate) || 0) * dayWidth }}
-        >
-          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-2 h-2 bg-red-500 rounded-full"></div>
-        </div>
-      )}
-
-      <div className="flex border-b border-[#E1E3E1] sticky top-0 bg-white z-30 shadow-sm">
-        <div className="w-64 sticky left-0 bg-white z-40 p-2 font-bold text-sm border-r border-[#E1E3E1]">Project/Part</div>
-        <div className="flex bg-white">
-          {days.map((day, i) => (
+    <div className="relative border border-[#E1E3E1] rounded-xl overflow-hidden bg-white">
+      <div className="overflow-auto max-h-[75vh]" style={{ scrollBehavior: 'smooth' }}>
+        <div className="min-w-max relative">
+          {/* Today Marker Line */}
+          {isWithinInterval(today, { start: minDate, end: maxDate }) && (
             <div 
-              key={i} 
-              id={format(day, 'yyyy-MM-dd') === format(today, 'yyyy-MM-dd') ? 'today-marker' : undefined}
-              className={`flex flex-col items-center justify-center text-[10px] border-l border-[#F0F0F0] ${
-                format(day, 'yyyy-MM-dd') === format(today, 'yyyy-MM-dd') ? 'bg-red-50 font-bold text-red-600' : 'text-[#44474E]'
-              }`} 
-              style={{ width: dayWidth }}
+              className="absolute top-0 bottom-0 w-[2px] bg-red-500 z-10 pointer-events-none"
+              style={{ left: 256 + (differenceInDays(today, minDate) || 0) * dayWidth }}
             >
-              {format(day, 'd')}
-              <span className="opacity-50">{format(day, 'MMM')}</span>
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-2 h-2 bg-red-500 rounded-full"></div>
             </div>
-          ))}
-        </div>
-      </div>
-      
-      <div className="space-y-4 py-4">
-        {validTasks.map((task) => {
-          return (
-            <div key={task.id} className="flex items-center group">
-              <div 
-                className="w-64 sticky left-0 bg-white z-10 p-2 text-xs font-medium border-r border-[#E1E3E1] group-hover:bg-gray-50 cursor-pointer whitespace-normal break-words shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]"
-                onClick={() => onEdit(task)}
-              >
-                <div className="font-bold text-blue-600">{task.project}</div>
-                <div className="text-[10px] text-gray-500 line-clamp-1">{task.projectDescription}</div>
-                <div className="text-[10px] opacity-50">{task.partNo}</div>
-              </div>
-              <div className="relative h-16 flex-1">
+          )}
+
+          {/* Sticky Header */}
+          <div className="flex sticky top-0 z-50 bg-[#F8F9FA] border-b border-[#E1E3E1]">
+            <div className="w-64 sticky left-0 bg-[#F8F9FA] z-[60] p-4 font-bold text-xs border-r border-[#E1E3E1] flex items-center">
+              Project / Part Number
+            </div>
+            <div className="flex">
+              {days.map((day, i) => (
+                <div 
+                  key={i} 
+                  id={format(day, 'yyyy-MM-dd') === format(today, 'yyyy-MM-dd') ? 'today-marker' : undefined}
+                  className={`flex flex-col items-center justify-center text-[10px] border-l border-[#F0F0F0] py-2 ${
+                    format(day, 'yyyy-MM-dd') === format(today, 'yyyy-MM-dd') ? 'bg-red-50 font-bold text-red-600' : 'text-[#44474E]'
+                  }`} 
+                  style={{ width: dayWidth }}
+                >
+                  <span className="opacity-40 text-[8px] uppercase">{format(day, 'EEE')}</span>
+                  <span className="text-sm">{format(day, 'd')}</span>
+                  <span className="opacity-50 text-[9px]">{format(day, 'MMM')}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          
+          <div className="divide-y divide-[#F0F0F0]">
+            {validTasks.map((task) => {
+              return (
+                <div key={task.id} className="flex items-center group hover:bg-gray-50/50 transition-colors">
+                  <div 
+                    className="w-64 sticky left-0 bg-white z-40 p-4 text-xs font-medium border-r border-[#E1E3E1] group-hover:bg-gray-50 cursor-pointer shadow-[4px_0_8px_-4px_rgba(0,0,0,0.05)]"
+                    onClick={() => onEdit(task)}
+                  >
+                    <div className="font-bold text-[#0061A4] mb-1">{task.project}</div>
+                    <div className="text-[11px] text-[#44474E] line-clamp-2 leading-tight mb-1">{task.projectDescription}</div>
+                    <div className="text-[10px] text-gray-400 font-mono">{task.partNo}</div>
+                  </div>
+                  <div className="relative h-20 flex-1">
                 {/* Milestones (Red Dots) */}
                 {Object.entries(task.milestones || {}).map(([key, date]) => {
                   if (!date) return null;
@@ -1047,6 +1201,8 @@ function GanttChart({ tasks, onEdit, onUpdateTask }: { tasks: NPITask[], onEdit:
         })}
       </div>
     </div>
+  </div>
+</div>
   );
 }
 

@@ -36,6 +36,10 @@ export interface NPITask {
 }
 
 export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'update' = 'replace') => {
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error("Gemini API Key is not configured. Please add it in Settings.");
+  }
+
   const prompt = `
     Analyze the following data extracted from an NPI (New Product Introduction) schedule Excel file.
     Convert it into a structured JSON array of projects/parts.
@@ -75,7 +79,11 @@ export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'up
   `;
 
   try {
-    const response = await ai.models.generateContent({
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error("AI Request Timeout: The file might be too large or the network is slow.")), 30000)
+    );
+
+    const generatePromise = ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: prompt,
       config: {
@@ -133,6 +141,8 @@ export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'up
         }
       }
     });
+
+    const response = (await Promise.race([generatePromise, timeoutPromise])) as any;
 
     return JSON.parse(response.text) as NPITask[];
   } catch (error) {
