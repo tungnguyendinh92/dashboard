@@ -23,8 +23,12 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'timeline' | 'table' | 'ai' | 'issues'>('dashboard');
   const [chatInput, setChatInput] = useState('');
   const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'ai', content: string }[]>([]);
-  const [googleSheetUrl, setGoogleSheetUrl] = useState('');
-  const [googleScriptUrl, setGoogleScriptUrl] = useState('');
+  const [googleSheetUrl, setGoogleSheetUrl] = useState(() => 
+    localStorage.getItem('google_sheet_url') || 'https://docs.google.com/spreadsheets/d/1LdjZm2Wd3c9FM1fkEg75c1SCAOqDux5iYaHpESxifuA/edit?usp=sharing'
+  );
+  const [googleScriptUrl, setGoogleScriptUrl] = useState(() => 
+    localStorage.getItem('google_script_url') || 'https://script.google.com/macros/s/AKfycbyZ98rLVMd0pNMuoiH5eBdTLZ8Vj-KIRn5w2ZA4NTBJZqpnqUH2-wn7c1163ImNJF2Jyg/exec'
+  );
   const [showSettings, setShowSettings] = useState(false);
   const [showAISidebar, setShowAISidebar] = useState(true);
   const [filterText, setFilterText] = useState('');
@@ -41,12 +45,6 @@ export default function App() {
       setPrevTasks(parsed);
     }
     
-    const savedSheetUrl = localStorage.getItem('google_sheet_url');
-    if (savedSheetUrl) setGoogleSheetUrl(savedSheetUrl);
-    
-    const savedScriptUrl = localStorage.getItem('google_script_url');
-    if (savedScriptUrl) setGoogleScriptUrl(savedScriptUrl);
-
     const savedNotes = localStorage.getItem('project_notes');
     if (savedNotes) setProjectNotes(JSON.parse(savedNotes));
   }, []);
@@ -952,16 +950,29 @@ export default function App() {
               <div className="space-y-4">
                 <div>
                   <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Google Sheet URL</label>
-                  <input 
-                    type="text"
-                    value={googleSheetUrl}
-                    onChange={(e) => {
-                      setGoogleSheetUrl(e.target.value);
-                      localStorage.setItem('google_sheet_url', e.target.value);
-                    }}
-                    placeholder="https://docs.google.com/spreadsheets/d/..."
-                    className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                  <div className="flex gap-2">
+                    <input 
+                      type="text"
+                      value={googleSheetUrl}
+                      onChange={(e) => {
+                        setGoogleSheetUrl(e.target.value);
+                        localStorage.setItem('google_sheet_url', e.target.value);
+                      }}
+                      placeholder="https://docs.google.com/spreadsheets/d/..."
+                      className="flex-1 bg-gray-50 border-none rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    {googleSheetUrl && (
+                      <a 
+                        href={googleSheetUrl} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="p-3 bg-gray-50 hover:bg-gray-100 rounded-xl text-blue-600 transition-colors"
+                        title="Open Google Sheet"
+                      >
+                        <Share2 className="w-5 h-5" />
+                      </a>
+                    )}
+                  </div>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Google Apps Script URL</label>
