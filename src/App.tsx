@@ -126,7 +126,13 @@ export default function App() {
   };
 
   const exportData = () => {
-    const dataStr = JSON.stringify(tasks, null, 2);
+    const exportObj = {
+      tasks,
+      projectNotes,
+      exportedAt: new Date().toISOString(),
+      version: '1.1'
+    };
+    const dataStr = JSON.stringify(exportObj, null, 2);
     const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
     const exportFileDefaultName = `npi_data_${format(new Date(), 'yyyyMMdd_HHmm')}.json`;
     const linkElement = document.createElement('a');
@@ -143,16 +149,22 @@ export default function App() {
     reader.onload = (evt) => {
       try {
         const content = evt.target?.result as string;
-        const importedTasks = JSON.parse(content);
-        if (Array.isArray(importedTasks)) {
-          setTasks(importedTasks);
-          alert("Data imported successfully!");
+        const imported = JSON.parse(content);
+        
+        if (Array.isArray(imported)) {
+          // Backward compatibility for old format
+          setTasks(imported);
+          alert("Data imported successfully (legacy format)!");
+        } else if (imported && imported.tasks) {
+          setTasks(imported.tasks);
+          if (imported.projectNotes) setProjectNotes(imported.projectNotes);
+          alert("Data and notes imported successfully!");
         } else {
-          alert("Invalid data format. Expected an array of tasks.");
+          alert("Invalid JSON format.");
         }
       } catch (error) {
-        console.error("Import Error:", error);
-        alert("Failed to import data. Please ensure it's a valid JSON file.");
+        console.error("Import error:", error);
+        alert("Failed to parse JSON file.");
       }
     };
     reader.readAsText(file);
@@ -300,7 +312,14 @@ export default function App() {
         method: 'POST',
         mode: 'cors', // Try cors first for better feedback
         headers: { 'Content-Type': 'text/plain' }, // Use text/plain to avoid preflight issues if needed
-        body: JSON.stringify({ action: 'upload', data: tasks })
+        body: JSON.stringify({ 
+          action: 'upload', 
+          data: { 
+            tasks, 
+            projectNotes,
+            updatedAt: new Date().toISOString()
+          } 
+        })
       });
       
       if (response.type === 'opaque') {
@@ -357,9 +376,14 @@ export default function App() {
       }
 
       const data = await response.json();
-      if (Array.isArray(data)) {
+      if (data && data.tasks && Array.isArray(data.tasks)) {
+        setTasks(data.tasks);
+        if (data.projectNotes) setProjectNotes(data.projectNotes);
+        alert("Data and notes synced from Google Sheet!");
+      } else if (Array.isArray(data)) {
+        // Backward compatibility
         setTasks(data);
-        alert("Data synced from Google Sheet!");
+        alert("Data synced from Google Sheet (legacy format)!");
       } else if (data && data.error) {
         throw new Error(data.error);
       } else {
@@ -539,6 +563,15 @@ export default function App() {
 
       {/* Main Content */}
       <main className={`transition-all duration-300 ${showAISidebar ? 'mr-80' : 'mr-0'} ml-64 p-8 min-h-screen`}>
+        {!process.env.GEMINI_API_KEY && (
+          <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-center gap-3 text-amber-800 text-sm">
+            <AlertCircle className="w-5 h-5 shrink-0" />
+            <p>
+              <strong>Gemini API Key missing:</strong> AI features will not work. 
+              If you deployed to Vercel, please add <code>GEMINI_API_KEY</code> to your environment variables.
+            </p>
+          </div>
+        )}
         <header className="flex flex-col gap-6 mb-8">
           <div className="flex justify-between items-center">
             <div>
