@@ -18,22 +18,40 @@ const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444'];
 
 export default function App() {
   const [tasks, setTasks] = useState<NPITask[]>([]);
+  const [prevTasks, setPrevTasks] = useState<NPITask[]>([]);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'timeline' | 'table' | 'ai'>('dashboard');
   const [chatInput, setChatInput] = useState('');
   const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'ai', content: string }[]>([]);
-  const [googleTokens, setGoogleTokens] = useState<any>(null);
-  const [spreadsheetId, setSpreadsheetId] = useState('');
-  const [syncing, setSyncing] = useState(false);
+  const [googleSheetUrl, setGoogleSheetUrl] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
+  const [filterText, setFilterText] = useState('');
+  const [projectNotes, setProjectNotes] = useState<Record<string, string>>({});
 
-  // Load tokens from localStorage on mount
+  // Load from localStorage on mount
   useEffect(() => {
-    const savedTokens = localStorage.getItem('google_tokens');
-    if (savedTokens) setGoogleTokens(JSON.parse(savedTokens));
+    const savedTasks = localStorage.getItem('npi_tasks');
+    if (savedTasks) {
+      const parsed = JSON.parse(savedTasks);
+      setTasks(parsed);
+      setPrevTasks(parsed);
+    }
     
-    const savedSheetId = localStorage.getItem('spreadsheet_id');
-    if (savedSheetId) setSpreadsheetId(savedSheetId);
+    const savedSheetUrl = localStorage.getItem('google_sheet_url');
+    if (savedSheetUrl) setGoogleSheetUrl(savedSheetUrl);
+
+    const savedNotes = localStorage.getItem('project_notes');
+    if (savedNotes) setProjectNotes(JSON.parse(savedNotes));
   }, []);
+
+  // Save to localStorage when data changes
+  useEffect(() => {
+    if (tasks.length > 0) localStorage.setItem('npi_tasks', JSON.stringify(tasks));
+  }, [tasks]);
+
+  useEffect(() => {
+    localStorage.setItem('project_notes', JSON.stringify(projectNotes));
+  }, [projectNotes]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -49,48 +67,25 @@ export default function App() {
       const data = XLSX.utils.sheet_to_json(ws);
       
       const parsedTasks = await parseExcelDataWithAI(data);
+      setPrevTasks(tasks);
       setTasks(parsedTasks);
       setLoading(false);
     };
     reader.readAsBinaryString(file);
   };
 
-  const handleGoogleAuth = async () => {
-    const res = await fetch('/api/auth/google/url');
-    const { url } = await res.json();
-    window.open(url, 'google_auth', 'width=600,height=700');
+  const filteredTasks = tasks.filter(t => 
+    t.projectDescription.toLowerCase().includes(filterText.toLowerCase()) ||
+    t.partNo.toLowerCase().includes(filterText.toLowerCase())
+  );
+
+  const handleNoteChange = (id: string, note: string) => {
+    setProjectNotes(prev => ({ ...prev, [id]: note }));
   };
 
-  useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      if (event.data?.type === 'GOOGLE_AUTH_SUCCESS') {
-        setGoogleTokens(event.data.tokens);
-        localStorage.setItem('google_tokens', JSON.stringify(event.data.tokens));
-      }
-    };
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, []);
-
-  const handleSyncToSheets = async () => {
-    if (!googleTokens || !spreadsheetId || tasks.length === 0) return;
-    setSyncing(true);
-    try {
-      const res = await fetch('/api/sheets/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tokens: googleTokens, spreadsheetId, data: tasks })
-      });
-      if (res.ok) {
-        alert('Successfully synced to Google Sheets!');
-      } else {
-        alert('Sync failed. Please check your Spreadsheet ID.');
-      }
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setSyncing(false);
-    }
+  const isStatusUpdated = (task: NPITask) => {
+    const prev = prevTasks.find(pt => pt.id === task.id);
+    return prev && prev.latestStatus !== task.latestStatus;
   };
 
   const handleChat = async () => {
@@ -105,15 +100,15 @@ export default function App() {
 
   const stats = {
     total: tasks.length,
-    completed: tasks.filter(t => t.status === 'Completed').length,
-    inProgress: tasks.filter(t => t.status === 'In Progress').length,
-    delayed: tasks.filter(t => t.status === 'Delayed').length,
+    completed: tasks.filter(t => t.progress === 100).length,
+    inProgress: tasks.filter(t => t.progress > 0 && t.progress < 100).length,
+    delayed: tasks.filter(t => t.latestStatus?.toLowerCase().includes('delay')).length,
   };
 
   const pieData = [
     { name: 'Completed', value: stats.completed },
     { name: 'In Progress', value: stats.inProgress },
-    { name: 'Pending', value: tasks.filter(t => t.status === 'Pending').length },
+    { name: 'Pending', value: tasks.filter(t => t.progress === 0).length },
     { name: 'Delayed', value: stats.delayed },
   ];
 
@@ -136,53 +131,98 @@ export default function App() {
         </nav>
 
         <div className="mt-auto pt-6 border-t border-[#E1E3E1]">
-          <div className="bg-[#F0F4F8] rounded-2xl p-4">
-            <h3 className="text-xs font-semibold text-[#44474E] uppercase tracking-wider mb-3">Google Sheets Sync</h3>
-            {!googleTokens ? (
-              <button 
-                onClick={handleGoogleAuth}
-                className="w-full flex items-center justify-center gap-2 bg-white border border-[#C4C7C5] py-2 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors"
-              >
-                <LogIn className="w-4 h-4" /> Connect Google
-              </button>
-            ) : (
-              <div className="flex flex-col gap-3">
-                <input 
-                  type="text" 
-                  placeholder="Spreadsheet ID"
-                  value={spreadsheetId}
-                  onChange={(e) => {
-                    setSpreadsheetId(e.target.value);
-                    localStorage.setItem('spreadsheet_id', e.target.value);
-                  }}
-                  className="w-full bg-white border border-[#C4C7C5] px-3 py-2 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <button 
-                  onClick={handleSyncToSheets}
-                  disabled={syncing || !spreadsheetId}
-                  className="w-full flex items-center justify-center gap-2 bg-[#0061A4] text-white py-2 rounded-xl text-sm font-medium hover:bg-[#004A7D] transition-colors disabled:opacity-50"
-                >
-                  {syncing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
-                  Sync Now
-                </button>
-              </div>
-            )}
-          </div>
+          <button 
+            onClick={() => setShowSettings(true)}
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-[#44474E] hover:bg-gray-100 transition-all font-medium"
+          >
+            <Settings className="w-5 h-5" />
+            Settings
+          </button>
         </div>
       </aside>
 
+      {/* Settings Modal */}
+      <AnimatePresence>
+        {showSettings && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-xl font-bold">Settings</h3>
+                <button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-gray-600">
+                  <RefreshCw className="w-6 h-6 rotate-45" />
+                </button>
+              </div>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-semibold text-[#44474E] mb-2">Google Sheet URL</label>
+                  <input 
+                    type="text" 
+                    value={googleSheetUrl}
+                    onChange={(e) => {
+                      setGoogleSheetUrl(e.target.value);
+                      localStorage.setItem('google_sheet_url', e.target.value);
+                    }}
+                    placeholder="https://docs.google.com/spreadsheets/d/..."
+                    className="w-full bg-[#F0F4F8] border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none"
+                  />
+                </div>
+                <div className="bg-blue-50 p-4 rounded-xl">
+                  <h4 className="text-xs font-bold text-blue-800 mb-2 uppercase">Google Apps Script Sync (Manual)</h4>
+                  <p className="text-[10px] text-blue-700 mb-2">
+                    If direct sync fails, you can use this script in your Google Sheet (Extensions {'>'} Apps Script):
+                  </p>
+                  <pre className="text-[9px] bg-white/50 p-2 rounded border border-blue-200 overflow-x-auto max-h-32">
+{`function doPost(e) {
+  var data = JSON.parse(e.postData.contents);
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  sheet.clear();
+  // Add headers and data logic here...
+  return ContentService.createTextOutput("Success");
+}`}
+                  </pre>
+                </div>
+                <button 
+                  onClick={() => setShowSettings(false)}
+                  className="w-full bg-[#0061A4] text-white py-3 rounded-xl font-bold hover:bg-[#004A7D] transition-all"
+                >
+                  Save & Close
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Main Content */}
       <main className="ml-64 p-8 min-h-screen">
-        <header className="flex justify-between items-center mb-8">
-          <div>
-            <h2 className="text-3xl font-bold text-[#1A1C1E]">NPI Schedule Dashboard</h2>
-            <p className="text-[#44474E]">Manage and visualize your product introduction timeline.</p>
+        <header className="flex flex-col gap-6 mb-8">
+          <div className="flex justify-between items-center">
+            <div>
+              <h2 className="text-3xl font-bold text-[#1A1C1E]">NPI Schedule Dashboard</h2>
+              <p className="text-[#44474E]">Manage and visualize your product introduction timeline.</p>
+            </div>
+            <label className="flex items-center gap-2 bg-[#0061A4] text-white px-6 py-3 rounded-2xl font-semibold cursor-pointer hover:bg-[#004A7D] transition-all shadow-lg shadow-blue-100 active:scale-95">
+              <Upload className="w-5 h-5" />
+              Upload Excel
+              <input type="file" accept=".xlsx, .xls" onChange={handleFileUpload} className="hidden" />
+            </label>
           </div>
-          <label className="flex items-center gap-2 bg-[#0061A4] text-white px-6 py-3 rounded-2xl font-semibold cursor-pointer hover:bg-[#004A7D] transition-all shadow-lg shadow-blue-100 active:scale-95">
-            <Upload className="w-5 h-5" />
-            Upload Excel
-            <input type="file" accept=".xlsx, .xls" onChange={handleFileUpload} className="hidden" />
-          </label>
+
+          <div className="bg-white p-2 rounded-2xl border border-[#E1E3E1] flex items-center gap-3 shadow-sm">
+            <div className="pl-4 text-gray-400"><LayoutDashboard className="w-5 h-5" /></div>
+            <input 
+              type="text" 
+              placeholder="Filter by Project Name or Part No..."
+              value={filterText}
+              onChange={(e) => setFilterText(e.target.value)}
+              className="flex-1 bg-transparent border-none outline-none py-2 text-sm"
+            />
+          </div>
         </header>
 
         {loading ? (
@@ -204,50 +244,48 @@ export default function App() {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
-                className="grid grid-cols-1 md:grid-cols-4 gap-6"
+                className="space-y-6"
               >
-                <StatCard label="Total Tasks" value={stats.total} icon={<FileSpreadsheet className="text-blue-600" />} />
-                <StatCard label="Completed" value={stats.completed} icon={<CheckCircle2 className="text-emerald-600" />} />
-                <StatCard label="In Progress" value={stats.inProgress} icon={<Clock className="text-blue-500" />} />
-                <StatCard label="Delayed" value={stats.delayed} icon={<AlertCircle className="text-red-500" />} />
-
-                <div className="md:col-span-2 bg-white p-6 rounded-3xl border border-[#E1E3E1] shadow-sm">
-                  <h3 className="text-lg font-bold mb-6">Task Status Distribution</h3>
-                  <div className="h-64">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={pieData}
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={60}
-                          outerRadius={80}
-                          paddingAngle={5}
-                          dataKey="value"
-                        >
-                          {pieData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip />
-                        <Legend />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                  <StatCard label="Total Projects" value={filteredTasks.length} icon={<FileSpreadsheet className="text-blue-600" />} />
+                  <StatCard label="Avg Progress" value={`${Math.round(filteredTasks.reduce((acc, t) => acc + t.progress, 0) / (filteredTasks.length || 1))}%`} icon={<CheckCircle2 className="text-emerald-600" />} />
+                  <StatCard label="Active Stages" value={new Set(filteredTasks.map(t => t.currentStage)).size} icon={<Clock className="text-blue-500" />} />
+                  <StatCard label="Alerts" value={filteredTasks.filter(t => t.latestStatus?.toLowerCase().includes('delay')).length} icon={<AlertCircle className="text-red-500" />} />
                 </div>
 
-                <div className="md:col-span-2 bg-white p-6 rounded-3xl border border-[#E1E3E1] shadow-sm">
-                  <h3 className="text-lg font-bold mb-6">Progress Overview</h3>
-                  <div className="h-64">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={tasks.slice(0, 8)}>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F0F0F0" />
-                        <XAxis dataKey="task" tick={{fontSize: 10}} />
-                        <YAxis />
-                        <Tooltip />
-                        <Bar dataKey="progress" fill="#0061A4" radius={[4, 4, 0, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
+                <div className="bg-white rounded-3xl border border-[#E1E3E1] shadow-sm overflow-hidden">
+                  <div className="p-6 border-b border-[#E1E3E1] flex justify-between items-center">
+                    <h3 className="text-lg font-bold">Overall Project Status</h3>
+                    <div className="flex items-center gap-2 text-xs text-gray-500">
+                      <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                      Today Marker
+                    </div>
+                  </div>
+                  <div className="p-6 space-y-8">
+                    {filteredTasks.map(task => (
+                      <div key={task.id} className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pb-8 border-b border-[#F0F0F0] last:border-0">
+                        <div className="lg:col-span-3">
+                          <h4 className="font-bold text-[#1A1C1E]">{task.projectDescription}</h4>
+                          <p className="text-xs text-gray-500 mb-2">{task.partNo}</p>
+                          <span className="px-2 py-1 bg-blue-50 text-blue-700 rounded-lg text-[10px] font-bold uppercase">
+                            {task.currentStage}
+                          </span>
+                        </div>
+                        
+                        <div className="lg:col-span-6">
+                          <ProjectMiniTimeline task={task} />
+                        </div>
+
+                        <div className="lg:col-span-3">
+                          <textarea 
+                            placeholder="Project notes..."
+                            value={projectNotes[task.id] || ''}
+                            onChange={(e) => handleNoteChange(task.id, e.target.value)}
+                            className="w-full h-24 bg-[#F8F9FA] border border-[#E1E3E1] rounded-xl p-3 text-xs focus:ring-1 focus:ring-blue-500 outline-none resize-none"
+                          />
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </motion.div>
@@ -261,7 +299,7 @@ export default function App() {
                 exit={{ opacity: 0, x: -20 }}
                 className="bg-white p-6 rounded-3xl border border-[#E1E3E1] shadow-sm overflow-x-auto"
               >
-                <GanttChart tasks={tasks} />
+                <GanttChart tasks={filteredTasks} />
               </motion.div>
             )}
 
@@ -273,43 +311,48 @@ export default function App() {
                 exit={{ opacity: 0 }}
                 className="bg-white rounded-3xl border border-[#E1E3E1] shadow-sm overflow-hidden"
               >
-                <table className="w-full text-left border-collapse">
-                  <thead className="bg-[#F0F4F8]">
-                    <tr>
-                      <th className="p-4 font-semibold text-sm">Task Name</th>
-                      <th className="p-4 font-semibold text-sm">Owner</th>
-                      <th className="p-4 font-semibold text-sm">Start Date</th>
-                      <th className="p-4 font-semibold text-sm">End Date</th>
-                      <th className="p-4 font-semibold text-sm">Status</th>
-                      <th className="p-4 font-semibold text-sm">Progress</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tasks.map((task) => (
-                      <tr key={task.id} className="border-t border-[#E1E3E1] hover:bg-gray-50 transition-colors">
-                        <td className="p-4 text-sm font-medium">{task.task}</td>
-                        <td className="p-4 text-sm text-[#44474E]">{task.owner}</td>
-                        <td className="p-4 text-sm text-[#44474E]">{task.startDate}</td>
-                        <td className="p-4 text-sm text-[#44474E]">{task.endDate}</td>
-                        <td className="p-4">
-                          <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                            task.status === 'Completed' ? 'bg-emerald-100 text-emerald-700' :
-                            task.status === 'In Progress' ? 'bg-blue-100 text-blue-700' :
-                            task.status === 'Delayed' ? 'bg-red-100 text-red-700' :
-                            'bg-gray-100 text-gray-700'
-                          }`}>
-                            {task.status}
-                          </span>
-                        </td>
-                        <td className="p-4">
-                          <div className="w-full bg-gray-200 rounded-full h-2">
-                            <div className="bg-blue-600 h-2 rounded-full" style={{ width: `${task.progress}%` }}></div>
-                          </div>
-                        </td>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse min-w-[1200px]">
+                    <thead className="bg-[#F0F4F8]">
+                      <tr>
+                        <th className="p-4 font-semibold text-sm sticky left-0 bg-[#F0F4F8] z-10">Project/Part Description</th>
+                        <th className="p-4 font-semibold text-sm">Part No</th>
+                        <th className="p-4 font-semibold text-sm">Molder</th>
+                        <th className="p-4 font-semibold text-sm">ODM</th>
+                        <th className="p-4 font-semibold text-sm">Current Stage</th>
+                        <th className="p-4 font-semibold text-sm">Latest Status</th>
+                        <th className="p-4 font-semibold text-sm">Milestones</th>
+                        <th className="p-4 font-semibold text-sm">Progress</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {filteredTasks.map((task) => (
+                        <tr key={task.id} className="border-t border-[#E1E3E1] hover:bg-gray-50 transition-colors group">
+                          <td className="p-4 text-sm font-medium sticky left-0 bg-white group-hover:bg-gray-50 z-10">{task.projectDescription}</td>
+                          <td className="p-4 text-sm text-[#44474E]">{task.partNo}</td>
+                          <td className="p-4 text-sm text-[#44474E]">{task.molder}</td>
+                          <td className="p-4 text-sm text-[#44474E]">{task.odm}</td>
+                          <td className="p-4 text-sm text-[#44474E] font-semibold">{task.currentStage}</td>
+                          <td className={`p-4 text-sm font-medium ${isStatusUpdated(task) ? 'text-blue-600' : 'text-[#44474E]'}`}>
+                            {task.latestStatus}
+                          </td>
+                          <td className="p-4 text-xs">
+                            <div className="flex flex-col gap-1">
+                              {task.milestones?.beta && <span>B: {task.milestones.beta}</span>}
+                              {task.milestones?.pilotRun && <span>P: {task.milestones.pilotRun}</span>}
+                              {task.milestones?.mp && <span>M: {task.milestones.mp}</span>}
+                            </div>
+                          </td>
+                          <td className="p-4">
+                            <div className="w-full bg-gray-200 rounded-full h-2">
+                              <div className="bg-blue-600 h-2 rounded-full" style={{ width: `${task.progress}%` }}></div>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </motion.div>
             )}
 
@@ -332,7 +375,7 @@ export default function App() {
                   {chatHistory.map((msg, i) => (
                     <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                       <div className={`max-w-[80%] p-4 rounded-2xl ${
-                        msg.role === 'user' ? 'bg-[#0061A4] text-white' : 'bg-[#F0F4F8] text-[#1A1C1E]'
+                        msg.role === 'user' ? 'bg-[#E3F2FD] text-[#0D47A1]' : 'bg-[#F0F4F8] text-[#1A1C1E]'
                       }`}>
                         <div className="markdown-body prose prose-sm max-w-none">
                           <ReactMarkdown>
@@ -406,11 +449,12 @@ function GanttChart({ tasks }: { tasks: NPITask[] }) {
   
   const days = eachDayOfInterval({ start: minDate, end: maxDate });
   const dayWidth = 40;
+  const today = new Date();
 
   return (
     <div className="min-w-max">
-      <div className="flex border-b border-[#E1E3E1] mb-4">
-        <div className="w-64 sticky left-0 bg-white z-10 p-2 font-bold text-sm">Task</div>
+      <div className="flex border-b border-[#E1E3E1] mb-4 relative">
+        <div className="w-64 sticky left-0 bg-white z-10 p-2 font-bold text-sm">Project/Part</div>
         <div className="flex">
           {days.map((day, i) => (
             <div key={i} className="flex flex-col items-center justify-center text-[10px] text-[#44474E] border-l border-[#F0F0F0]" style={{ width: dayWidth }}>
@@ -419,37 +463,119 @@ function GanttChart({ tasks }: { tasks: NPITask[] }) {
             </div>
           ))}
         </div>
+        {/* Today Marker Line */}
+        {isWithinInterval(today, { start: minDate, end: maxDate }) && (
+          <div 
+            className="absolute top-0 bottom-0 w-[2px] bg-red-500 z-20 pointer-events-none animate-pulse"
+            style={{ left: 256 + differenceInDays(today, minDate) * dayWidth }}
+          >
+            <div className="absolute -top-2 left-1/2 -translate-x-1/2 w-2 h-2 bg-red-500 rounded-full"></div>
+          </div>
+        )}
       </div>
-      <div className="space-y-2">
+      <div className="space-y-4">
         {tasks.map((task) => {
-          const start = parseISO(task.startDate);
-          const end = parseISO(task.endDate);
-          const leftOffset = differenceInDays(start, minDate) * dayWidth;
-          const width = (differenceInDays(end, start) + 1) * dayWidth;
-
           return (
             <div key={task.id} className="flex items-center group">
               <div className="w-64 sticky left-0 bg-white z-10 p-2 text-xs font-medium truncate border-r border-[#E1E3E1] group-hover:bg-gray-50">
-                {task.task}
+                {task.projectDescription}
+                <div className="text-[10px] opacity-50">{task.partNo}</div>
               </div>
-              <div className="relative h-8 flex-1">
-                <div 
-                  className={`absolute h-6 top-1 rounded-lg shadow-sm flex items-center px-2 text-[10px] font-bold text-white overflow-hidden ${
-                    task.status === 'Completed' ? 'bg-emerald-500' :
-                    task.status === 'In Progress' ? 'bg-blue-500' :
-                    task.status === 'Delayed' ? 'bg-red-500' :
-                    'bg-gray-400'
-                  }`}
-                  style={{ left: leftOffset, width: width }}
-                >
-                  <div className="absolute left-0 top-0 h-full bg-black/10" style={{ width: `${task.progress}%` }}></div>
-                  <span className="relative z-10 truncate">{task.progress}%</span>
-                </div>
+              <div className="relative h-16 flex-1">
+                {/* Milestones (Red Dots) */}
+                {Object.entries(task.milestones || {}).map(([key, date]) => {
+                  if (!date) return null;
+                  const d = parseISO(date);
+                  const offset = differenceInDays(d, minDate) * dayWidth;
+                  return (
+                    <div 
+                      key={key}
+                      className="absolute top-2 w-3 h-3 bg-red-600 rounded-full transform -translate-x-1/2 z-10 shadow-sm"
+                      style={{ left: offset }}
+                      title={`${key.toUpperCase()}: ${date}`}
+                    >
+                      <span className="absolute -top-4 left-1/2 transform -translate-x-1/2 text-[8px] font-bold text-red-700 whitespace-nowrap bg-white/80 px-1 rounded">
+                        {key.toUpperCase()}
+                      </span>
+                    </div>
+                  );
+                })}
+
+                {/* Events (Blue Dots) */}
+                {Object.entries(task.timelinePoints || {}).map(([key, date]) => {
+                  if (!date) return null;
+                  const d = parseISO(date);
+                  const offset = differenceInDays(d, minDate) * dayWidth;
+                  return (
+                    <div 
+                      key={key}
+                      className="absolute top-8 w-2 h-2 bg-blue-600 rounded-full transform -translate-x-1/2 z-10"
+                      style={{ left: offset }}
+                      title={`${key.toUpperCase()}: ${date}`}
+                    >
+                      <span className="absolute top-3 left-1/2 transform -translate-x-1/2 text-[8px] font-bold text-blue-700 whitespace-nowrap bg-white/80 px-1 rounded">
+                        {key.toUpperCase()}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function ProjectMiniTimeline({ task }: { task: NPITask }) {
+  const startDates = [task.startDate, ...Object.values(task.milestones || {}), ...Object.values(task.timelinePoints || {})]
+    .filter(Boolean).map(d => parseISO(d!));
+  const endDates = [task.endDate, ...Object.values(task.milestones || {}), ...Object.values(task.timelinePoints || {})]
+    .filter(Boolean).map(d => parseISO(d!));
+  
+  const minDate = startOfMonth(new Date(Math.min(...startDates.map(d => d.getTime()))));
+  const maxDate = endOfMonth(new Date(Math.max(...endDates.map(d => d.getTime()))));
+  const totalDays = differenceInDays(maxDate, minDate) || 1;
+  const today = new Date();
+
+  return (
+    <div className="relative h-16 bg-gray-50 rounded-xl p-2 overflow-hidden border border-[#F0F0F0]">
+      {/* Today Marker */}
+      {isWithinInterval(today, { start: minDate, end: maxDate }) && (
+        <div 
+          className="absolute top-0 bottom-0 w-[2px] bg-red-500 z-20 animate-pulse"
+          style={{ left: `${(differenceInDays(today, minDate) / totalDays) * 100}%` }}
+        >
+          <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-red-500 rounded-full"></div>
+        </div>
+      )}
+
+      {/* Milestones */}
+      {Object.entries(task.milestones || {}).map(([key, date]) => {
+        if (!date) return null;
+        const d = parseISO(date);
+        const pos = (differenceInDays(d, minDate) / totalDays) * 100;
+        return (
+          <div key={key} className="absolute top-2 flex flex-col items-center" style={{ left: `${pos}%` }}>
+            <div className="w-2 h-2 bg-red-600 rounded-full"></div>
+            <span className="text-[8px] font-bold text-red-700 mt-1">{key.toUpperCase()}</span>
+          </div>
+        );
+      })}
+
+      {/* Events */}
+      {Object.entries(task.timelinePoints || {}).map(([key, date]) => {
+        if (!date) return null;
+        const d = parseISO(date);
+        const pos = (differenceInDays(d, minDate) / totalDays) * 100;
+        return (
+          <div key={key} className="absolute top-8 flex flex-col items-center" style={{ left: `${pos}%` }}>
+            <div className="w-1.5 h-1.5 bg-blue-600 rounded-full"></div>
+            <span className="text-[8px] font-bold text-blue-700 mt-1">{key.toUpperCase()}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
