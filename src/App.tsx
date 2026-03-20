@@ -7,7 +7,7 @@ import {
 import { 
   Upload, FileSpreadsheet, Calendar, LayoutDashboard, MessageSquare, 
   Settings, CheckCircle2, Clock, AlertCircle, ChevronRight, Send,
-  RefreshCw, Share2, LogIn
+  RefreshCw, Share2, LogIn, Volume2, VolumeX
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, parseISO, differenceInDays, addDays, startOfMonth, endOfMonth, eachDayOfInterval, isWithinInterval, isValid } from 'date-fns';
@@ -34,6 +34,7 @@ export default function App() {
   const [filterText, setFilterText] = useState('');
   const [projectNotes, setProjectNotes] = useState<Record<string, string>>({});
   const [editingTask, setEditingTask] = useState<NPITask | null>(null);
+  const [isSilent, setIsSilent] = useState(() => localStorage.getItem('ai_silent') === 'true');
   const timelineRef = useRef<HTMLDivElement>(null);
 
   // Load from localStorage on mount
@@ -47,6 +48,11 @@ export default function App() {
     
     const savedNotes = localStorage.getItem('project_notes');
     if (savedNotes) setProjectNotes(JSON.parse(savedNotes));
+
+    // Auto-sync from Google Sheet on load
+    if (googleScriptUrl) {
+      fetchFromGoogleSheet();
+    }
   }, []);
 
   // Save to localStorage when data changes
@@ -57,6 +63,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('project_notes', JSON.stringify(projectNotes));
   }, [projectNotes]);
+
+  useEffect(() => {
+    localStorage.setItem('ai_silent', isSilent.toString());
+  }, [isSilent]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, mode: 'replace' | 'update') => {
     const file = e.target.files?.[0];
@@ -247,6 +257,7 @@ export default function App() {
   };
 
   const speak = (text: string) => {
+    if (isSilent) return;
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
@@ -519,12 +530,21 @@ export default function App() {
                 <MessageSquare className="w-5 h-5 text-blue-600" />
                 <h3 className="font-bold">AI Assistant</h3>
               </div>
-              <button 
-                onClick={() => setShowAISidebar(false)}
-                className="p-2 hover:bg-gray-100 rounded-lg text-gray-400"
-              >
-                <ChevronRight className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => setIsSilent(!isSilent)}
+                  className={`p-2 rounded-lg transition-colors ${isSilent ? 'bg-gray-100 text-gray-400' : 'bg-blue-50 text-blue-600'}`}
+                  title={isSilent ? "Unmute AI" : "Mute AI"}
+                >
+                  {isSilent ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                </button>
+                <button 
+                  onClick={() => setShowAISidebar(false)}
+                  className="p-2 hover:bg-gray-100 rounded-lg text-gray-400"
+                >
+                  <ChevronRight className="w-5 h-5" />
+                </button>
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
               {chatHistory.length === 0 && (

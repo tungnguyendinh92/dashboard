@@ -1,5 +1,17 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
+const getApiKey = () => {
+  const keys = [
+    process.env.GEMINI_API_KEY,
+    process.env.GEMINI_API_KEY_2,
+    process.env.GEMINI_API_KEY_3
+  ].filter(Boolean) as string[];
+  
+  if (keys.length === 0) return null;
+  // Random selection to distribute load/quota
+  return keys[Math.floor(Math.random() * keys.length)];
+};
+
 export interface NPITask {
   id: string;
   project: string; // Grouping key
@@ -34,9 +46,9 @@ export interface NPITask {
 }
 
 export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'update' = 'replace') => {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = getApiKey();
   if (!apiKey) {
-    throw new Error("Gemini API Key is not configured. Please add it to your environment variables (GEMINI_API_KEY).");
+    throw new Error("Gemini API Key is not configured. Please add GEMINI_API_KEY to your environment variables.");
   }
 
   const ai = new GoogleGenAI({ apiKey });
@@ -156,7 +168,7 @@ export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'up
 };
 
 export const askAIAboutSchedule = async (tasks: NPITask[], question: string) => {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = getApiKey();
   if (!apiKey) {
     return { 
       answer: "Gemini API Key is missing. Please add GEMINI_API_KEY to your environment variables.", 
