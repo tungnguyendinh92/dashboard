@@ -67,43 +67,53 @@ export default function App() {
     setLoading(true);
     const reader = new FileReader();
     reader.onload = async (evt) => {
-      const bstr = evt.target?.result;
-      const wb = XLSX.read(bstr, { type: 'binary' });
-      const wsname = wb.SheetNames[0];
-      const ws = wb.Sheets[wsname];
-      const data = XLSX.utils.sheet_to_json(ws);
-      
-      const parsedTasksRaw = await parseExcelDataWithAI(data);
-      
-      // Post-process to ensure IDs are unique
-      const idSet = new Set<string>();
-      const parsedTasks = parsedTasksRaw.map((task, idx) => {
-        let uniqueId = task.id || `${task.project}_${task.partNo}_${idx}`;
-        if (idSet.has(uniqueId)) {
-          uniqueId = `${uniqueId}_${idx}_${Date.now()}`;
-        }
-        idSet.add(uniqueId);
-        return { ...task, id: uniqueId };
-      });
-      
-      if (mode === 'replace') {
-        setPrevTasks(tasks);
-        setTasks(parsedTasks);
-      } else {
-        setTasks(prev => {
-          const merged = [...prev];
-          parsedTasks.forEach(newTask => {
-            const index = merged.findIndex(t => t.id === newTask.id || (t.project === newTask.project && t.partNo === newTask.partNo));
-            if (index > -1) {
-              merged[index] = { ...merged[index], ...newTask };
-            } else {
-              merged.push(newTask);
-            }
-          });
-          return merged;
+      try {
+        const bstr = evt.target?.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        const data = XLSX.utils.sheet_to_json(ws);
+        
+        const parsedTasksRaw = await parseExcelDataWithAI(data);
+        
+        // Post-process to ensure IDs are unique
+        const idSet = new Set<string>();
+        const parsedTasks = parsedTasksRaw.map((task, idx) => {
+          let uniqueId = task.id || `${task.project}_${task.partNo}_${idx}`;
+          if (idSet.has(uniqueId)) {
+            uniqueId = `${uniqueId}_${idx}_${Date.now()}`;
+          }
+          idSet.add(uniqueId);
+          return { ...task, id: uniqueId };
         });
+        
+        if (mode === 'replace') {
+          setPrevTasks(tasks);
+          setTasks(parsedTasks);
+        } else {
+          setTasks(prev => {
+            const merged = [...prev];
+            parsedTasks.forEach(newTask => {
+              const index = merged.findIndex(t => t.id === newTask.id || (t.project === newTask.project && t.partNo === newTask.partNo));
+              if (index > -1) {
+                merged[index] = { ...merged[index], ...newTask };
+              } else {
+                merged.push(newTask);
+              }
+            });
+            return merged;
+          });
+        }
+      } catch (error) {
+        console.error("File upload error:", error);
+        alert("Failed to process file. Please ensure it's a valid Excel file.");
+      } finally {
+        setLoading(false);
       }
+    };
+    reader.onerror = () => {
       setLoading(false);
+      alert("Failed to read file.");
     };
     reader.readAsBinaryString(file);
   };
@@ -936,7 +946,17 @@ function GanttChart({ tasks, onEdit, onUpdateTask }: { tasks: NPITask[], onEdit:
 
   return (
     <div className="min-w-max relative">
-      <div className="flex border-b border-[#E1E3E1] mb-4 sticky top-0 bg-white z-30 shadow-sm">
+      {/* Today Marker Line - Spans entire height */}
+      {isWithinInterval(today, { start: minDate, end: maxDate }) && (
+        <div 
+          className="absolute top-0 bottom-0 w-[2px] bg-red-500 z-20 pointer-events-none animate-pulse"
+          style={{ left: 256 + (differenceInDays(today, minDate) || 0) * dayWidth }}
+        >
+          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-2 h-2 bg-red-500 rounded-full"></div>
+        </div>
+      )}
+
+      <div className="flex border-b border-[#E1E3E1] sticky top-0 bg-white z-30 shadow-sm">
         <div className="w-64 sticky left-0 bg-white z-40 p-2 font-bold text-sm border-r border-[#E1E3E1]">Project/Part</div>
         <div className="flex bg-white">
           {days.map((day, i) => (
@@ -953,17 +973,9 @@ function GanttChart({ tasks, onEdit, onUpdateTask }: { tasks: NPITask[], onEdit:
             </div>
           ))}
         </div>
-        {/* Today Marker Line */}
-        {isWithinInterval(today, { start: minDate, end: maxDate }) && (
-          <div 
-            className="absolute top-0 bottom-0 w-[2px] bg-red-500 z-20 pointer-events-none animate-pulse"
-            style={{ left: 256 + (differenceInDays(today, minDate) || 0) * dayWidth }}
-          >
-            <div className="absolute -top-2 left-1/2 -translate-x-1/2 w-2 h-2 bg-red-500 rounded-full"></div>
-          </div>
-        )}
       </div>
-      <div className="space-y-4 pb-4">
+      
+      <div className="space-y-4 py-4">
         {validTasks.map((task) => {
           return (
             <div key={task.id} className="flex items-center group">
