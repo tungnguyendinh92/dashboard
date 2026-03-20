@@ -228,7 +228,7 @@ export default function App() {
     setChatInput('');
     setChatHistory(prev => [...prev, { role: 'user', content: userMsg }]);
     
-    const aiResponse = await askAIAboutSchedule(tasks, userMsg);
+    const aiResponse = await askAIAboutSchedule(tasks, projectNotes, userMsg);
     
     if (aiResponse.updates && aiResponse.updates.length > 0) {
       setTasks(prev => {
@@ -1256,8 +1256,9 @@ function GanttChart({ tasks, onEdit, onUpdateTask }: { tasks: NPITask[], onEdit:
                       dragConstraints={{ left: -offset, right: (days.length * dayWidth) - offset }}
                       dragElastic={0}
                       dragMomentum={false}
+                      whileDrag={{ scale: 1.3, zIndex: 50 }}
                       onDragEnd={(_, info) => handleDragEnd(task, 'milestone', key, info)}
-                      className="absolute top-2 w-3 h-3 bg-red-600 rounded-full transform -translate-x-1/2 z-10 shadow-sm cursor-grab active:cursor-grabbing hover:scale-125 transition-transform"
+                      className="absolute top-2 w-3 h-3 bg-red-600 rounded-full transform -translate-x-1/2 z-10 shadow-sm cursor-grab active:cursor-grabbing hover:scale-125 transition-all duration-200"
                       style={{ left: offset }}
                       onClick={(e) => { e.stopPropagation(); onEdit(task); }}
                       title={`${key.toUpperCase()}: ${date} (Drag to move)`}
@@ -1283,8 +1284,9 @@ function GanttChart({ tasks, onEdit, onUpdateTask }: { tasks: NPITask[], onEdit:
                       dragConstraints={{ left: -offset, right: (days.length * dayWidth) - offset }}
                       dragElastic={0}
                       dragMomentum={false}
+                      whileDrag={{ scale: 1.3, zIndex: 50 }}
                       onDragEnd={(_, info) => handleDragEnd(task, 'point', key, info)}
-                      className="absolute top-8 w-2 h-2 bg-blue-600 rounded-full transform -translate-x-1/2 z-10 cursor-grab active:cursor-grabbing hover:scale-125 transition-transform"
+                      className="absolute top-8 w-2 h-2 bg-blue-600 rounded-full transform -translate-x-1/2 z-10 cursor-grab active:cursor-grabbing hover:scale-125 transition-all duration-200"
                       style={{ left: offset }}
                       onClick={(e) => { e.stopPropagation(); onEdit(task); }}
                       title={`${key.toUpperCase()}: ${date} (Drag to move)`}

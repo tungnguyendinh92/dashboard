@@ -53,121 +53,117 @@ export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'up
 
   const ai = new GoogleGenAI({ apiKey });
   
-  // Slice to avoid token limits, but keep enough for context
-  const sampleData = rawData.slice(0, 800);
+  // Process in chunks to avoid timeouts and token limits
+  const CHUNK_SIZE = 150; 
+  const chunks = [];
+  for (let i = 0; i < rawData.length; i += CHUNK_SIZE) {
+    chunks.push(rawData.slice(i, i + CHUNK_SIZE));
+  }
 
-  const prompt = `
-    Analyze the following raw data extracted from an NPI (New Product Introduction) schedule Excel file.
-    The data is provided as an array of arrays (rows).
-    Identify the header row and extract all project/part items.
-    
-    Extract the following fields for each item:
-    - project: The main project name (e.g., "RBE300Y", "Project Alpha"). Look for codes or names that represent the overall project.
-    - projectDescription: Description of the project or part tool.
-    - partNo: Part number.
-    - molder: Molder name.
-    - odm: ODM name.
-    - currentStage: Current stage of the project.
-    - latestStatus: Extract from the column that contains status updates or delays.
-    - startDate: The earliest date found for this item (YYYY-MM-DD).
-    - endDate: The latest date found for this item (YYYY-MM-DD).
-    - milestones: Object containing dates for:
-        - beta: Extract from column "Beta".
-        - pilotRun: Extract from column "Pilot Run".
-        - mp: Extract from column "MP".
-        - xf: Extract from column "XF".
-    - timelinePoints: Object containing dates for:
-        - toolingStart: Extract from column "Tooling Start".
-        - t1: Extract from column "T1".
-        - t2: Extract from column "T2".
-        - t3: Extract from column "T3".
-        - t4: Extract from column "T4".
-        - t5: Extract from column "T5".
-    - issues: Array of objects with 'trial', 'description', 'status', 'severity' (if found in the row).
-    
-    IMPORTANT: Process ALL rows that contain actual data. Do not skip any.
-    Each item in the returned array must have a unique 'id'. 
-    Generate the 'id' by combining the project name, part number, and row index.
-    
-    Raw Data (Rows): ${JSON.stringify(sampleData)}
-  `;
+  // Only process first 3 chunks (450 rows) to keep it responsive, or all if needed
+  // Let's do up to 600 rows (4 chunks)
+  const chunksToProcess = chunks.slice(0, 4);
+  const allResults: NPITask[] = [];
 
-  try {
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error("AI Request Timeout: The file might be too large or the network is slow.")), 30000)
-    );
+  for (const [index, chunk] of chunksToProcess.entries()) {
+    const prompt = `
+      Analyze the following raw data (Chunk ${index + 1}/${chunksToProcess.length}) extracted from an NPI schedule Excel file.
+      Identify the header row (if present in this chunk) and extract all project/part items.
+      
+      Extract the following fields for each item:
+      - project, projectDescription, partNo, molder, odm, currentStage, latestStatus
+      - startDate, endDate (YYYY-MM-DD)
+      - milestones: { beta, pilotRun, mp, xf }
+      - timelinePoints: { toolingStart, t1, t2, t3, t4, t5 }
+      - issues: Array of { trial, description, status, severity }
+      
+      IMPORTANT: Process ALL rows in this chunk that contain actual data.
+      Each item must have a unique 'id'. Generate it using project, partNo, and chunk index.
+      
+      Raw Data (Rows): ${JSON.stringify(chunk)}
+    `;
 
-    const generatePromise = ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              id: { type: Type.STRING },
-              project: { type: Type.STRING },
-              projectDescription: { type: Type.STRING },
-              partNo: { type: Type.STRING },
-              molder: { type: Type.STRING },
-              odm: { type: Type.STRING },
-              currentStage: { type: Type.STRING },
-              latestStatus: { type: Type.STRING },
-              startDate: { type: Type.STRING },
-              endDate: { type: Type.STRING },
-              milestones: {
-                type: Type.OBJECT,
-                properties: {
-                  beta: { type: Type.STRING },
-                  pilotRun: { type: Type.STRING },
-                  mp: { type: Type.STRING },
-                  xf: { type: Type.STRING }
-                }
-              },
-              timelinePoints: {
-                type: Type.OBJECT,
-                properties: {
-                  toolingStart: { type: Type.STRING },
-                  t1: { type: Type.STRING },
-                  t2: { type: Type.STRING },
-                  t3: { type: Type.STRING },
-                  t4: { type: Type.STRING },
-                  t5: { type: Type.STRING }
-                }
-              },
-              issues: {
-                type: Type.ARRAY,
-                items: {
+    try {
+      // 45 second timeout per chunk
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error(`AI Request Timeout on chunk ${index + 1}`)), 45000)
+      );
+
+      const generatePromise = ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING },
+                project: { type: Type.STRING },
+                projectDescription: { type: Type.STRING },
+                partNo: { type: Type.STRING },
+                molder: { type: Type.STRING },
+                odm: { type: Type.STRING },
+                currentStage: { type: Type.STRING },
+                latestStatus: { type: Type.STRING },
+                startDate: { type: Type.STRING },
+                endDate: { type: Type.STRING },
+                milestones: {
                   type: Type.OBJECT,
                   properties: {
-                    trial: { type: Type.STRING },
-                    description: { type: Type.STRING },
-                    status: { type: Type.STRING, enum: ['open', 'closed'] },
-                    severity: { type: Type.STRING, enum: ['low', 'medium', 'high'] }
+                    beta: { type: Type.STRING },
+                    pilotRun: { type: Type.STRING },
+                    mp: { type: Type.STRING },
+                    xf: { type: Type.STRING }
+                  }
+                },
+                timelinePoints: {
+                  type: Type.OBJECT,
+                  properties: {
+                    toolingStart: { type: Type.STRING },
+                    t1: { type: Type.STRING },
+                    t2: { type: Type.STRING },
+                    t3: { type: Type.STRING },
+                    t4: { type: Type.STRING },
+                    t5: { type: Type.STRING }
+                  }
+                },
+                issues: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      trial: { type: Type.STRING },
+                      description: { type: Type.STRING },
+                      status: { type: Type.STRING, enum: ['open', 'closed'] },
+                      severity: { type: Type.STRING, enum: ['low', 'medium', 'high'] }
+                    }
                   }
                 }
-              }
-            },
-            required: ['id', 'project', 'projectDescription', 'partNo', 'startDate', 'endDate']
+              },
+              required: ['id', 'project', 'projectDescription', 'partNo', 'startDate', 'endDate']
+            }
           }
         }
+      });
+
+      const response = (await Promise.race([generatePromise, timeoutPromise])) as any;
+      const text = response.text;
+      if (text) {
+        const chunkResults = JSON.parse(text) as NPITask[];
+        allResults.push(...chunkResults);
       }
-    });
-
-    const response = (await Promise.race([generatePromise, timeoutPromise])) as any;
-    const text = response.text;
-    if (!text) throw new Error("AI returned an empty response during parsing.");
-
-    return JSON.parse(text) as NPITask[];
-  } catch (error) {
-    console.error("AI Parsing Error:", error);
-    return [];
+    } catch (error) {
+      console.error(`Error parsing chunk ${index + 1}:`, error);
+      // Continue to next chunk even if one fails
+    }
   }
+
+  return allResults;
 };
 
-export const askAIAboutSchedule = async (tasks: NPITask[], question: string) => {
+export const askAIAboutSchedule = async (tasks: NPITask[], projectNotes: Record<string, string>, question: string) => {
   const apiKey = getApiKey();
   if (!apiKey) {
     return { 
@@ -179,7 +175,7 @@ export const askAIAboutSchedule = async (tasks: NPITask[], question: string) => 
   const ai = new GoogleGenAI({ apiKey });
 
   const prompt = `
-    You are an expert NPI Project Manager. Below is the current NPI schedule data.
+    You are an expert NPI Project Manager. Below is the current NPI schedule data and project overview notes.
     Answer the user's question based on this data. Be concise and professional.
     
     If the user asks to modify data (e.g., "Change T1 of Project X to 2024-05-01"), 
@@ -200,6 +196,7 @@ export const askAIAboutSchedule = async (tasks: NPITask[], question: string) => 
     }
 
     Schedule Data: ${JSON.stringify(tasks)}
+    Project Overview/Notes: ${JSON.stringify(projectNotes)}
     
     Question: ${question}
   `;
