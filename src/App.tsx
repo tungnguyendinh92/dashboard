@@ -74,14 +74,16 @@ export default function App() {
         const wb = XLSX.read(data, { type: 'array' });
         const wsname = wb.SheetNames[0];
         const ws = wb.Sheets[wsname];
-        const jsonData = XLSX.utils.sheet_to_json(ws);
         
-        if (jsonData.length === 0) {
+        // Use raw rows (header: 1) to be more robust for AI parsing
+        const rawRows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+        
+        if (rawRows.length === 0) {
           alert("The Excel file seems to be empty.");
           return;
         }
 
-        const parsedTasksRaw = await parseExcelDataWithAI(jsonData);
+        const parsedTasksRaw = await parseExcelDataWithAI(rawRows);
         
         // Post-process to ensure IDs are unique
         const idSet = new Set<string>();
@@ -298,16 +300,35 @@ export default function App() {
     try {
       const response = await fetch(googleScriptUrl, {
         method: 'POST',
-        mode: 'no-cors', // Apps Script often requires no-cors for simple POST
-        headers: { 'Content-Type': 'application/json' },
+        mode: 'cors', // Try cors first for better feedback
+        headers: { 'Content-Type': 'text/plain' }, // Use text/plain to avoid preflight issues if needed
         body: JSON.stringify({ action: 'upload', data: tasks })
       });
       
-      // Since no-cors doesn't return body, we assume success if no error thrown
-      alert("Data sent to Google Apps Script! (Note: ensure your script is deployed as a Web App with 'Anyone' access)");
-    } catch (error) {
+      if (response.type === 'opaque') {
+        alert("Data sent! (Note: Response was opaque due to CORS, but data should be uploaded)");
+      } else {
+        const result = await response.json();
+        if (result.status === 'success') {
+          alert("Data successfully uploaded to Google Sheet!");
+        } else {
+          throw new Error(result.error || "Unknown error from script");
+        }
+      }
+    } catch (error: any) {
       console.error("Upload Error:", error);
-      alert("Failed to connect to Google Apps Script. Check your URL and CORS settings.");
+      // Fallback for no-cors if cors fails
+      try {
+        await fetch(googleScriptUrl, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'upload', data: tasks })
+        });
+        alert("Data sent via fallback mode! Check your Google Sheet.");
+      } catch (fallbackError) {
+        alert(`Failed to connect to Google Apps Script: ${error.message}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -322,18 +343,33 @@ export default function App() {
     
     setLoading(true);
     try {
-      const response = await fetch(`${googleScriptUrl}?action=download`);
-      if (!response.ok) throw new Error("Network response was not ok");
+      // Use a timestamp to avoid caching
+      const url = new URL(googleScriptUrl);
+      url.searchParams.append('action', 'download');
+      url.searchParams.append('t', Date.now().toString());
+
+      const response = await fetch(url.toString(), {
+        method: 'GET',
+        redirect: 'follow'
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Network response was not ok: ${response.status} ${text}`);
+      }
+
       const data = await response.json();
       if (Array.isArray(data)) {
         setTasks(data);
         alert("Data synced from Google Sheet!");
+      } else if (data && data.error) {
+        throw new Error(data.error);
       } else {
         alert("Received invalid data format from script.");
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Fetch Error:", error);
-      alert("Failed to fetch data. Ensure your script handles GET requests and returns JSON.");
+      alert(`Failed to fetch data: ${error.message || "Unknown error"}. \n\nEnsure your script is deployed as a Web App with "Anyone" access and handles GET requests.`);
     } finally {
       setLoading(false);
     }

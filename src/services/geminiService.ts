@@ -40,42 +40,43 @@ export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'up
     throw new Error("Gemini API Key is not configured. Please add it in Settings.");
   }
 
+  // Slice to avoid token limits, but keep enough for context
+  const sampleData = rawData.slice(0, 800);
+
   const prompt = `
-    Analyze the following data extracted from an NPI (New Product Introduction) schedule Excel file.
-    Convert it into a structured JSON array of projects/parts.
+    Analyze the following raw data extracted from an NPI (New Product Introduction) schedule Excel file.
+    The data is provided as an array of arrays (rows).
+    Identify the header row and extract all project/part items.
     
-    Extract the following fields for each item, paying close attention to these specific column names in the raw data:
+    Extract the following fields for each item:
     - project: The main project name (e.g., "RBE300Y", "Project Alpha"). Look for codes or names that represent the overall project.
     - projectDescription: Description of the project or part tool.
     - partNo: Part number.
     - molder: Molder name.
     - odm: ODM name.
     - currentStage: Current stage of the project.
-    - latestStatus: Extract from the column named "Latest Status update".
+    - latestStatus: Extract from the column that contains status updates or delays.
     - startDate: The earliest date found for this item (YYYY-MM-DD).
     - endDate: The latest date found for this item (YYYY-MM-DD).
     - milestones: Object containing dates for:
-        - beta: Extract from column "Beta" (often column AA).
-        - pilotRun: Extract from column "Pilot Run" (often column AB).
-        - mp: Extract from column "MP" (often column AC).
-        - xf: Extract from column "XF" (often column AD).
+        - beta: Extract from column "Beta".
+        - pilotRun: Extract from column "Pilot Run".
+        - mp: Extract from column "MP".
+        - xf: Extract from column "XF".
     - timelinePoints: Object containing dates for:
         - toolingStart: Extract from column "Tooling Start".
-        - t1: Extract from column "T1" (often column V).
-        - t2: Extract from column "T2" (often column W).
-        - t3: Extract from column "T3" (often column X).
-        - t4: Extract from column "T4" (often column Y).
-        - t5: Extract from column "T5" (often column Z).
-    - issues: Array of objects with 'trial', 'description', 'status', 'severity' (if found).
-
-    IMPORTANT: Ensure project names like "RBE300Y" are correctly identified and not split or ignored.
+        - t1: Extract from column "T1".
+        - t2: Extract from column "T2".
+        - t3: Extract from column "T3".
+        - t4: Extract from column "T4".
+        - t5: Extract from column "T5".
+    - issues: Array of objects with 'trial', 'description', 'status', 'severity' (if found in the row).
     
-    IMPORTANT: Process ALL rows in the raw data. Do not skip any.
+    IMPORTANT: Process ALL rows that contain actual data. Do not skip any.
     Each item in the returned array must have a unique 'id'. 
-    Generate the 'id' by combining the project name, part number, and row index (e.g., "ProjectA_Part123_0"). 
-    This is CRITICAL to avoid duplicate keys in the UI.
+    Generate the 'id' by combining the project name, part number, and row index.
     
-    Raw Data: ${JSON.stringify(rawData.slice(0, 500))}
+    Raw Data (Rows): ${JSON.stringify(sampleData)}
   `;
 
   try {
