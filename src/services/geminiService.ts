@@ -41,7 +41,7 @@ export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'up
     Convert it into a structured JSON array of projects/parts.
     
     Extract the following fields for each item:
-    - project: The main project name (usually the first column).
+    - project: The main project name (e.g., "RBE300Y", "Project Alpha"). Look for codes or names that represent the overall project.
     - projectDescription: Description of the project or part tool.
     - partNo: Part number.
     - molder: Molder name.
@@ -54,6 +54,8 @@ export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'up
     - timelinePoints: Object containing dates for 'toolingStart', 't1', 't2', 't3', 't4', 't5' (YYYY-MM-DD).
     - issues: Array of objects with 'trial', 'description', 'status', 'severity' (if found).
 
+    IMPORTANT: Ensure project names like "RBE300Y" are correctly identified and not split or ignored.
+    
     Raw Data: ${JSON.stringify(rawData.slice(0, 50))}
   `;
 

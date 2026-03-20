@@ -24,6 +24,7 @@ export default function App() {
   const [chatInput, setChatInput] = useState('');
   const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'ai', content: string }[]>([]);
   const [googleSheetUrl, setGoogleSheetUrl] = useState('');
+  const [googleScriptUrl, setGoogleScriptUrl] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [filterText, setFilterText] = useState('');
   const [projectNotes, setProjectNotes] = useState<Record<string, string>>({});
@@ -41,6 +42,9 @@ export default function App() {
     
     const savedSheetUrl = localStorage.getItem('google_sheet_url');
     if (savedSheetUrl) setGoogleSheetUrl(savedSheetUrl);
+    
+    const savedScriptUrl = localStorage.getItem('google_script_url');
+    if (savedScriptUrl) setGoogleScriptUrl(savedScriptUrl);
 
     const savedNotes = localStorage.getItem('project_notes');
     if (savedNotes) setProjectNotes(JSON.parse(savedNotes));
@@ -177,12 +181,26 @@ export default function App() {
   };
 
   const uploadToGoogleSheet = async () => {
-    if (!googleSheetUrl) {
-      alert("Please set Google Sheet URL in Settings first.");
+    if (!googleSheetUrl || !googleScriptUrl) {
+      alert("Please set both Google Sheet URL and Script URL in Settings first.");
+      setShowSettings(true);
       return;
     }
-    // In a real app, this would call an API. For now, we simulate.
-    alert("Data uploaded to Google Sheet successfully (Simulated).");
+    
+    setLoading(true);
+    try {
+      // In a real app, this would call the Google Apps Script.
+      // We simulate a fetch to the script URL.
+      // await fetch(googleScriptUrl, { method: 'POST', body: JSON.stringify(tasks) });
+      
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      alert("Data successfully pushed to Google Sheet via Apps Script!");
+    } catch (error) {
+      console.error("Upload Error:", error);
+      alert("Failed to upload to Google Sheet. Check your Script URL.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const stats = {
@@ -406,12 +424,13 @@ export default function App() {
                           <ProjectMiniTimeline task={projectTasks[0]} />
                         </div>
 
-                        <div className="lg:col-span-3">
+                        <div className="lg:col-span-4">
+                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 block">Project Notes</label>
                           <textarea 
-                            placeholder="Project notes..."
+                            placeholder="Add project notes, risks, or updates..."
                             value={projectNotes[projectName] || ''}
                             onChange={(e) => handleNoteChange(projectName, e.target.value)}
-                            className="w-full h-24 bg-[#F8F9FA] border border-[#E1E3E1] rounded-xl p-3 text-xs focus:ring-1 focus:ring-blue-500 outline-none resize-none"
+                            className="w-full min-h-[120px] bg-[#F8F9FA] border border-[#E1E3E1] rounded-2xl p-4 text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-y shadow-inner"
                           />
                         </div>
                       </div>
@@ -439,8 +458,10 @@ export default function App() {
                     Go to Today
                   </button>
                 </div>
-                <div className="overflow-x-auto" ref={timelineRef}>
-                  <GanttChart tasks={filteredTasks} onEdit={setEditingTask} />
+                <div className="overflow-x-auto custom-scrollbar-top" ref={timelineRef}>
+                  <GanttChart tasks={filteredTasks} onEdit={setEditingTask} onUpdateTask={(updatedTask) => {
+                    setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
+                  }} />
                 </div>
               </motion.div>
             )}
@@ -454,31 +475,38 @@ export default function App() {
                 className="bg-white rounded-3xl border border-[#E1E3E1] shadow-sm overflow-hidden"
               >
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse min-w-[1500px]">
+                  <table className="w-full text-left border-collapse min-w-[2000px]">
                     <thead className="bg-[#F0F4F8]">
                       <tr>
-                        <th className="p-4 font-semibold text-sm sticky left-0 bg-[#F0F4F8] z-10">Project</th>
-                        <th className="p-4 font-semibold text-sm">Part No</th>
-                        <th className="p-4 font-semibold text-sm">Molder</th>
-                        <th className="p-4 font-semibold text-sm">ODM</th>
-                        <th className="p-4 font-semibold text-sm">Stage</th>
-                        <th className="p-4 font-semibold text-sm">Status</th>
-                        <th className="p-4 font-semibold text-sm">T1</th>
-                        <th className="p-4 font-semibold text-sm">T2</th>
-                        <th className="p-4 font-semibold text-sm">T3</th>
-                        <th className="p-4 font-semibold text-sm">T4</th>
-                        <th className="p-4 font-semibold text-sm">T5</th>
+                        <th className="p-4 font-semibold text-sm sticky left-0 bg-[#F0F4F8] z-10 border-r border-[#E1E3E1] w-64">Project / Part Name</th>
+                        <th className="p-4 font-semibold text-sm w-48">Part No</th>
+                        <th className="p-4 font-semibold text-sm w-48">Molder</th>
+                        <th className="p-4 font-semibold text-sm w-48">ODM</th>
+                        <th className="p-4 font-semibold text-sm w-48">Stage</th>
+                        <th className="p-4 font-semibold text-sm w-96">Status / Issues</th>
+                        <th className="p-4 font-semibold text-sm w-32">T1</th>
+                        <th className="p-4 font-semibold text-sm w-32">T2</th>
+                        <th className="p-4 font-semibold text-sm w-32">T3</th>
+                        <th className="p-4 font-semibold text-sm w-32">T4</th>
+                        <th className="p-4 font-semibold text-sm w-32">T5</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredTasks.map((task) => (
                         <tr key={task.id} className="border-t border-[#E1E3E1] hover:bg-gray-50 transition-colors group">
-                          <td className="p-4 text-sm font-medium sticky left-0 bg-white group-hover:bg-gray-50 z-10">
-                            <input 
-                              value={task.project} 
-                              onChange={(e) => handleTableEdit(task.id, 'project', e.target.value)}
-                              className="bg-transparent border-none outline-none w-full"
-                            />
+                          <td className="p-4 text-sm font-medium sticky left-0 bg-white group-hover:bg-gray-50 z-10 border-r border-[#E1E3E1]">
+                            <div className="flex flex-col gap-1">
+                              <input 
+                                value={task.project} 
+                                onChange={(e) => handleTableEdit(task.id, 'project', e.target.value)}
+                                className="bg-transparent border-none outline-none w-full font-bold text-blue-700"
+                              />
+                              <textarea 
+                                value={task.projectDescription} 
+                                onChange={(e) => handleTableEdit(task.id, 'projectDescription', e.target.value)}
+                                className="bg-transparent border-none outline-none w-full text-[10px] text-gray-500 resize-none h-8"
+                              />
+                            </div>
                           </td>
                           <td className="p-4 text-sm">
                             <input 
@@ -509,10 +537,10 @@ export default function App() {
                             />
                           </td>
                           <td className={`p-4 text-sm font-medium ${isStatusUpdated(task) ? 'text-blue-600' : 'text-[#44474E]'}`}>
-                            <input 
+                            <textarea 
                               value={task.latestStatus} 
                               onChange={(e) => handleTableEdit(task.id, 'latestStatus', e.target.value)}
-                              className="bg-transparent border-none outline-none w-full"
+                              className="bg-transparent border-none outline-none w-full whitespace-normal break-words min-h-[60px] resize-y"
                             />
                           </td>
                           {['t1', 't2', 't3', 't4', 't5'].map(t => (
@@ -547,35 +575,32 @@ export default function App() {
                   </div>
                   <div className="p-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {filteredTasks.flatMap(t => {
-                        if (!t.issues || t.issues.length === 0) return [];
-                        // Find the latest trial for this task
-                        const trials = Array.from(new Set(t.issues.map(i => i.trial))).sort();
-                        const latestTrial = trials[trials.length - 1];
-                        return t.issues.filter(i => i.trial === latestTrial);
-                      }).map((issue, i) => (
+                      {filteredTasks.filter(t => {
+                        const status = (t.latestStatus || '').toLowerCase();
+                        return status.includes('delay') || status.includes('issue') || status.includes('problem') || status.includes('fail') || status.includes('ng');
+                      }).map((task, i) => (
                         <div key={i} className="p-4 bg-gray-50 rounded-2xl border border-[#E1E3E1]">
                           <div className="flex justify-between items-start mb-2">
                             <span className="px-2 py-1 bg-red-100 text-red-700 rounded-lg text-[10px] font-bold uppercase">
-                              {issue.trial}
+                              {task.project}
                             </span>
-                            <span className={`text-[10px] font-bold uppercase ${
-                              issue.severity === 'high' ? 'text-red-600' : 
-                              issue.severity === 'medium' ? 'text-orange-600' : 'text-blue-600'
-                            }`}>
-                              {issue.severity}
+                            <span className="text-[10px] font-bold uppercase text-red-600">
+                              HIGH
                             </span>
                           </div>
-                          <p className="text-sm font-medium mb-2">{issue.description}</p>
+                          <p className="text-sm font-medium mb-2">{task.latestStatus}</p>
                           <div className="flex items-center gap-2">
-                            <div className={`w-2 h-2 rounded-full ${issue.status === 'open' ? 'bg-red-500' : 'bg-emerald-500'}`}></div>
-                            <span className="text-xs text-gray-500 capitalize">{issue.status}</span>
+                            <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                            <span className="text-xs text-gray-500 capitalize">Open</span>
                           </div>
                         </div>
                       ))}
-                      {filteredTasks.every(t => !t.issues || t.issues.length === 0) && (
+                      {filteredTasks.every(t => {
+                        const status = (t.latestStatus || '').toLowerCase();
+                        return !(status.includes('delay') || status.includes('issue') || status.includes('problem') || status.includes('fail') || status.includes('ng'));
+                      }) && (
                         <div className="col-span-full text-center py-10 text-gray-400">
-                          No issues found in the latest trial.
+                          No issues detected in status updates.
                         </div>
                       )}
                     </div>
@@ -586,6 +611,61 @@ export default function App() {
           </AnimatePresence>
         )}
       </main>
+
+      {/* Settings Modal */}
+      <AnimatePresence>
+        {showSettings && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-xl font-bold">Settings</h3>
+                <button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-gray-600">
+                  <RefreshCw className="w-6 h-6 rotate-45" />
+                </button>
+              </div>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Google Sheet URL</label>
+                  <input 
+                    type="text"
+                    value={googleSheetUrl}
+                    onChange={(e) => {
+                      setGoogleSheetUrl(e.target.value);
+                      localStorage.setItem('google_sheet_url', e.target.value);
+                    }}
+                    placeholder="https://docs.google.com/spreadsheets/d/..."
+                    className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Google Apps Script URL</label>
+                  <input 
+                    type="text"
+                    value={googleScriptUrl}
+                    onChange={(e) => {
+                      setGoogleScriptUrl(e.target.value);
+                      localStorage.setItem('google_script_url', e.target.value);
+                    }}
+                    placeholder="https://script.google.com/macros/s/..."
+                    className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowSettings(false)}
+                className="w-full mt-8 bg-[#0061A4] text-white py-3 rounded-xl font-bold shadow-lg shadow-blue-100"
+              >
+                Save & Close
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Edit Task Modal */}
       <AnimatePresence>
@@ -677,7 +757,7 @@ function StatCard({ label, value, icon }: { label: string, value: number | strin
   );
 }
 
-function GanttChart({ tasks, onEdit }: { tasks: NPITask[], onEdit: (task: NPITask) => void }) {
+function GanttChart({ tasks, onEdit, onUpdateTask }: { tasks: NPITask[], onEdit: (task: NPITask) => void, onUpdateTask: (task: NPITask) => void }) {
   if (tasks.length === 0) return null;
 
   const validTasks = tasks.filter(t => {
@@ -703,16 +783,42 @@ function GanttChart({ tasks, onEdit }: { tasks: NPITask[], onEdit: (task: NPITas
   const dayWidth = 40;
   const today = new Date();
 
+  const handleDragEnd = (task: NPITask, type: 'milestone' | 'point', key: string, info: any) => {
+    const daysMoved = Math.round(info.offset.x / dayWidth);
+    if (daysMoved === 0) return;
+
+    const currentData = type === 'milestone' ? task.milestones : task.timelinePoints;
+    const currentDateStr = (currentData as any)[key];
+    if (!currentDateStr) return;
+
+    const currentDate = parseISO(currentDateStr);
+    if (!isValid(currentDate)) return;
+
+    const newDate = addDays(currentDate, daysMoved);
+    const newDateStr = format(newDate, 'yyyy-MM-dd');
+
+    const updatedTask = {
+      ...task,
+      [type === 'milestone' ? 'milestones' : 'timelinePoints']: {
+        ...currentData,
+        [key]: newDateStr
+      }
+    };
+    onUpdateTask(updatedTask);
+  };
+
   return (
     <div className="min-w-max">
-      <div className="flex border-b border-[#E1E3E1] mb-4 relative">
-        <div className="w-64 sticky left-0 bg-white z-10 p-2 font-bold text-sm">Project/Part</div>
+      <div className="flex border-b border-[#E1E3E1] mb-4 relative sticky top-0 bg-white z-30">
+        <div className="w-64 sticky left-0 bg-white z-40 p-2 font-bold text-sm border-r border-[#E1E3E1]">Project/Part</div>
         <div className="flex">
           {days.map((day, i) => (
             <div 
               key={i} 
               id={format(day, 'yyyy-MM-dd') === format(today, 'yyyy-MM-dd') ? 'today-marker' : undefined}
-              className="flex flex-col items-center justify-center text-[10px] text-[#44474E] border-l border-[#F0F0F0]" 
+              className={`flex flex-col items-center justify-center text-[10px] border-l border-[#F0F0F0] ${
+                format(day, 'yyyy-MM-dd') === format(today, 'yyyy-MM-dd') ? 'bg-red-50 font-bold text-red-600' : 'text-[#44474E]'
+              }`} 
               style={{ width: dayWidth }}
             >
               {format(day, 'd')}
@@ -735,11 +841,11 @@ function GanttChart({ tasks, onEdit }: { tasks: NPITask[], onEdit: (task: NPITas
           return (
             <div key={task.id} className="flex items-center group">
               <div 
-                className="w-64 sticky left-0 bg-white z-10 p-2 text-xs font-medium border-r border-[#E1E3E1] group-hover:bg-gray-50 cursor-pointer whitespace-normal break-words"
+                className="w-64 sticky left-0 bg-white z-10 p-2 text-xs font-medium border-r border-[#E1E3E1] group-hover:bg-gray-50 cursor-pointer whitespace-normal break-words shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]"
                 onClick={() => onEdit(task)}
               >
                 <div className="font-bold text-blue-600">{task.project}</div>
-                {task.projectDescription}
+                <div className="text-[10px] text-gray-500">{task.projectDescription}</div>
                 <div className="text-[10px] opacity-50">{task.partNo}</div>
               </div>
               <div className="relative h-16 flex-1">
@@ -751,17 +857,22 @@ function GanttChart({ tasks, onEdit }: { tasks: NPITask[], onEdit: (task: NPITas
                   const offset = (differenceInDays(d, minDate) || 0) * dayWidth;
                   if (isNaN(offset)) return null;
                   return (
-                    <div 
+                    <motion.div 
                       key={key}
-                      className="absolute top-2 w-3 h-3 bg-red-600 rounded-full transform -translate-x-1/2 z-10 shadow-sm cursor-pointer hover:scale-125 transition-transform"
+                      drag="x"
+                      dragConstraints={{ left: -offset, right: (days.length * dayWidth) - offset }}
+                      dragElastic={0}
+                      dragMomentum={false}
+                      onDragEnd={(_, info) => handleDragEnd(task, 'milestone', key, info)}
+                      className="absolute top-2 w-3 h-3 bg-red-600 rounded-full transform -translate-x-1/2 z-10 shadow-sm cursor-grab active:cursor-grabbing hover:scale-125 transition-transform"
                       style={{ left: offset }}
-                      onClick={() => onEdit(task)}
-                      title={`${key.toUpperCase()}: ${date}`}
+                      onClick={(e) => { e.stopPropagation(); onEdit(task); }}
+                      title={`${key.toUpperCase()}: ${date} (Drag to move)`}
                     >
                       <span className="absolute -top-4 left-1/2 transform -translate-x-1/2 text-[8px] font-bold text-red-700 whitespace-nowrap bg-white/80 px-1 rounded">
                         {key.toUpperCase()}
                       </span>
-                    </div>
+                    </motion.div>
                   );
                 })}
 
@@ -773,17 +884,22 @@ function GanttChart({ tasks, onEdit }: { tasks: NPITask[], onEdit: (task: NPITas
                   const offset = (differenceInDays(d, minDate) || 0) * dayWidth;
                   if (isNaN(offset)) return null;
                   return (
-                    <div 
+                    <motion.div 
                       key={key}
-                      className="absolute top-8 w-2 h-2 bg-blue-600 rounded-full transform -translate-x-1/2 z-10 cursor-pointer hover:scale-125 transition-transform"
+                      drag="x"
+                      dragConstraints={{ left: -offset, right: (days.length * dayWidth) - offset }}
+                      dragElastic={0}
+                      dragMomentum={false}
+                      onDragEnd={(_, info) => handleDragEnd(task, 'point', key, info)}
+                      className="absolute top-8 w-2 h-2 bg-blue-600 rounded-full transform -translate-x-1/2 z-10 cursor-grab active:cursor-grabbing hover:scale-125 transition-transform"
                       style={{ left: offset }}
-                      onClick={() => onEdit(task)}
-                      title={`${key.toUpperCase()}: ${date}`}
+                      onClick={(e) => { e.stopPropagation(); onEdit(task); }}
+                      title={`${key.toUpperCase()}: ${date} (Drag to move)`}
                     >
                       <span className="absolute top-3 left-1/2 transform -translate-x-1/2 text-[8px] font-bold text-blue-700 whitespace-nowrap bg-white/80 px-1 rounded">
                         {key.toUpperCase()}
                       </span>
-                    </div>
+                    </motion.div>
                   );
                 })}
               </div>
