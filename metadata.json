@@ -1,0 +1,5 @@
+{
+  "name": "NPI Schedule AI Dashboard",
+  "description": "AI-powered NPI schedule management with Excel upload, Gantt timeline, and Google Sheets sync.",
+  "requestFramePermissions": []
+}
