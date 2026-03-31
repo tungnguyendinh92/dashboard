@@ -47,7 +47,7 @@ export interface NPITask {
   }[];
 }
 
-export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'update' = 'replace') => {
+export const parseExcelDataWithAI = async (rawData: any[], onProgress?: (msg: string) => void) => {
   const apiKey = getApiKey();
   if (!apiKey) {
     throw new Error("Gemini API Key is not configured. Please add GEMINI_API_KEY to your environment variables.");
@@ -55,148 +55,155 @@ export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'up
 
   const ai = new GoogleGenAI({ apiKey });
   
-  // Process in chunks to avoid timeouts and token limits
-  const CHUNK_SIZE = 150; 
+  // Filter out completely empty rows or rows that are obviously headers/empty
+  const filteredData = rawData.filter(row => {
+    if (!Array.isArray(row)) return false;
+    // A row is valid if it has at least some content in the first few columns
+    return row.some(cell => cell !== null && cell !== undefined && String(cell).trim() !== '');
+  });
+
+  // Process in smaller chunks to ensure the AI can return ALL items without hitting output token limits
+  // 40-50 rows is a safe bet for high-precision extraction with a large schema
+  const CHUNK_SIZE = 40; 
   const chunks = [];
-  for (let i = 0; i < rawData.length; i += CHUNK_SIZE) {
-    chunks.push(rawData.slice(i, i + CHUNK_SIZE));
+  for (let i = 0; i < filteredData.length; i += CHUNK_SIZE) {
+    chunks.push(filteredData.slice(i, i + CHUNK_SIZE));
   }
 
-  // Process all chunks to ensure no data is missed
+  if (onProgress) onProgress(`Processing ${filteredData.length} rows in ${chunks.length} chunks...`);
+  console.log(`Processing ${filteredData.length} rows in ${chunks.length} chunks...`);
+
   const allResults: NPITask[] = [];
   for (const [index, chunk] of chunks.entries()) {
-    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("AI Request Timeout")), 60000));
+    const msg = `Processing chunk ${index + 1}/${chunks.length}...`;
+    if (onProgress) onProgress(msg);
+    console.log(msg);
+    
+    // Increased timeout for large chunks
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("AI Request Timeout")), 90000));
+    
     const prompt = `
       You are a professional NPI Data Analyst. Your task is to extract high-precision data from an NPI schedule Excel file.
+      The data is provided as an array of arrays, where each inner array represents a row.
       
       STRICT COLUMN MAPPING RULES (MANDATORY):
-      - Project Name: Column A (Required)
-      - Project Description: Column B
-      - Part Number: Column C (Required)
-      - Molder: Column D
-      - ODM: Column E
-      - Current Stage: Column F
-      - Latest Status/Issues: Column G (Crucial for issue extraction)
-      - Start Date: Column H (Format: YYYY-MM-DD or similar)
-      - End Date: Column J (Format: YYYY-MM-DD or similar)
-      - DFM: Column U
-      - Tooling Start: Column I
-      - T1: Column V
-      - T2: Column W
-      - T3: Column X
-      - T4: Column Y
-      - T5: Column Z
-      - Beta Milestone: Column AA
-      - Pilot Run Milestone: Column AB
-      - MP Milestone: Column AC
-      - XF Milestone: Column AD
+      - Project Name: Column A (Index 0) - Required
+      - Project Description: Column B (Index 1)
+      - Part Number: Column C (Index 2) - Required
+      - Molder: Column D (Index 3)
+      - ODM: Column E (Index 4)
+      - Current Stage: Column F (Index 5)
+      - Latest Status/Issues: Column G (Index 6) - Crucial for issue extraction
+      - Start Date: Column H (Index 7)
+      - End Date: Column J (Index 9)
+      - Tooling Start: Column I (Index 8)
+      - DFM: Column U (Index 20)
+      - T1: Column V (Index 21)
+      - T2: Column W (Index 22)
+      - T3: Column X (Index 23)
+      - T4: Column Y (Index 24)
+      - T5: Column Z (Index 25)
+      - Beta Milestone: Column AA (Index 26)
+      - Pilot Run Milestone: Column AB (Index 27)
+      - MP Milestone: Column AC (Index 28)
+      - XF Milestone: Column AD (Index 29)
 
-      EXTRACT FOR EACH ITEM:
-      - project, projectDescription, partNo, molder, odm, currentStage, latestStatus
-      - ALL DATES (startDate, endDate, milestones, timelinePoints) MUST BE IN Format: YYYY-MM-DD.
-      - milestones: { beta, pilotRun, mp, xf }
-      - timelinePoints: { dfm, toolingStart, t1, t2, t3, t4, t5 }
-      
-      ISSUE EXTRACTION RULES:
-      - Scan Column G (Latest Status/Issues) and prioritize information associated with the LATEST 'T' trial mentioned (e.g., if T4 and T5 are both mentioned, T5 is the latest update).
-      - Split by bullet points, newlines, or semicolons.
-      - For each issue, identify:
-        - trial: which trial it belongs to (e.g., T1, T2, Beta)
-        - description: the actual problem
-        - status: 'open' (if not mentioned as fixed/closed) or 'closed'
-        - severity: 'low', 'medium', or 'high' (based on keywords like 'critical', 'major', 'minor')
-        - category: MUST be one of ['Function', 'Cosmetic', 'ECN', 'Other']
-      
-      ISSUE CATEGORIZATION LOGIC:
-      - 'Function': Mechanical/Electrical performance, fit, function, dimension out of spec, assembly issues.
-      - 'Cosmetic': Surface finish, color, texture, appearance, scratches, sink marks, flash.
-      - 'ECN': Engineering changes, design updates, drawing revisions.
-      - 'Other': Logistics, material availability, or anything else.
+      EXTRACTION REQUIREMENTS:
+      1. For EACH ROW that has a Part Number (Col C), you MUST create one entry.
+      2. If a row is missing a Project Name (Col A), use the Project Name from the most recent row above it that HAD a Project Name. This is a common Excel grouping pattern.
+      3. ALL DATES MUST BE in YYYY-MM-DD format. If the input is a serial number (Excel date), convert it.
+      4. latestStatus: Capture the full text from Column G.
+      5. issues: Extract individual issues from Column G. 
+         - Prioritize the LATEST 'T' trial mentioned (e.g., T5 status over T4).
+         - If an issue is marked as [SOLVED] or "Resolved", set status to 'closed'. Otherwise 'open'.
+         - Category MUST be one of: ['Function', 'Cosmetic', 'ECN', 'Other'].
       
       IMPORTANT: 
-      - DO NOT SKIP ANY ROW that contains part data or project names.
-      - If a row has a Project Name (Column A) or a Part Number (Column C), it MUST be processed.
-      - If a date is missing or invalid, leave it null/undefined.
-      - Process ALL rows in the provided chunk.
-      - Each item must have a unique 'id' (combine project and partNo if needed). 
+      - DO NOT SKIP ANY DATA ROW.
+      - If a row looks like a header (e.g., contains "Project Name", "Part No"), skip it.
+      - Each item must have a unique 'id' (combine project and partNo if needed).
+      - Return an empty array [] if no valid data rows are found in this chunk.
       
-      Raw Data (Rows): ${JSON.stringify(chunk)}
+      Raw Data Chunk: ${JSON.stringify(chunk)}
     `;
 
     try {
-      const generatePromise = ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                id: { type: Type.STRING },
-                project: { type: Type.STRING },
-                projectDescription: { type: Type.STRING },
-                partNo: { type: Type.STRING },
-                molder: { type: Type.STRING },
-                odm: { type: Type.STRING },
-                currentStage: { type: Type.STRING },
-                latestStatus: { type: Type.STRING },
-                startDate: { type: Type.STRING },
-                endDate: { type: Type.STRING },
-                milestones: {
-                  type: Type.OBJECT,
-                  properties: {
-                    beta: { type: Type.STRING },
-                    pilotRun: { type: Type.STRING },
-                    mp: { type: Type.STRING },
-                    xf: { type: Type.STRING }
-                  }
-                },
-                timelinePoints: {
-                  type: Type.OBJECT,
-                  properties: {
-                    dfm: { type: Type.STRING },
-                    toolingStart: { type: Type.STRING },
-                    t1: { type: Type.STRING },
-                    t2: { type: Type.STRING },
-                    t3: { type: Type.STRING },
-                    t4: { type: Type.STRING },
-                    t5: { type: Type.STRING }
-                  }
-                },
-                issues: {
-                  type: Type.ARRAY,
-                  items: {
+      const response = await Promise.race([
+        ai.models.generateContent({
+          model: "gemini-3-flash-preview",
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.STRING },
+                  project: { type: Type.STRING },
+                  projectDescription: { type: Type.STRING },
+                  partNo: { type: Type.STRING },
+                  molder: { type: Type.STRING },
+                  odm: { type: Type.STRING },
+                  currentStage: { type: Type.STRING },
+                  latestStatus: { type: Type.STRING },
+                  startDate: { type: Type.STRING },
+                  endDate: { type: Type.STRING },
+                  milestones: {
                     type: Type.OBJECT,
                     properties: {
-                      trial: { type: Type.STRING },
-                      description: { type: Type.STRING },
-                      status: { type: Type.STRING, enum: ['open', 'closed'] },
-                      severity: { type: Type.STRING, enum: ['low', 'medium', 'high'] },
-                      category: { type: Type.STRING, enum: ['Function', 'Cosmetic', 'ECN', 'Other'] }
+                      beta: { type: Type.STRING },
+                      pilotRun: { type: Type.STRING },
+                      mp: { type: Type.STRING },
+                      xf: { type: Type.STRING }
+                    }
+                  },
+                  timelinePoints: {
+                    type: Type.OBJECT,
+                    properties: {
+                      dfm: { type: Type.STRING },
+                      toolingStart: { type: Type.STRING },
+                      t1: { type: Type.STRING },
+                      t2: { type: Type.STRING },
+                      t3: { type: Type.STRING },
+                      t4: { type: Type.STRING },
+                      t5: { type: Type.STRING }
+                    }
+                  },
+                  issues: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        trial: { type: Type.STRING },
+                        description: { type: Type.STRING },
+                        status: { type: Type.STRING, enum: ['open', 'closed'] },
+                        severity: { type: Type.STRING, enum: ['low', 'medium', 'high'] },
+                        category: { type: Type.STRING, enum: ['Function', 'Cosmetic', 'ECN', 'Other'] }
+                      }
                     }
                   }
-                }
-              },
-              required: ['id', 'project', 'partNo']
+                },
+                required: ['project', 'partNo']
+              }
             }
           }
-        }
-      });
+        }),
+        timeoutPromise
+      ]) as any;
 
-      const response = (await Promise.race([generatePromise, timeoutPromise])) as any;
       const text = response.text;
       if (text) {
         const chunkResults = JSON.parse(text) as NPITask[];
+        console.log(`Chunk ${index + 1} parsed successfully. Found ${chunkResults.length} items.`);
         allResults.push(...chunkResults);
       }
     } catch (error) {
       console.error(`Error parsing chunk ${index + 1}:`, error);
-      // Continue to next chunk even if one fails
     }
   }
 
+  console.log(`Extraction complete. Total items found: ${allResults.length}`);
   return allResults;
 };
 

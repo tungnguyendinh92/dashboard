@@ -20,6 +20,7 @@ export default function App() {
   const [tasks, setTasks] = useState<NPITask[]>([]);
   const [prevTasks, setPrevTasks] = useState<NPITask[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState('');
   const [activeTab, setActiveTab] = useState<'dashboard' | 'timeline' | 'table' | 'ai' | 'issues'>('dashboard');
   const [chatInput, setChatInput] = useState('');
   const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'ai', content: string }[]>([]);
@@ -74,6 +75,7 @@ export default function App() {
     if (!file) return;
 
     setLoading(true);
+    setLoadingMessage('Reading Excel file...');
     const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
@@ -86,19 +88,29 @@ export default function App() {
         let allRawRows: any[] = [];
         wb.SheetNames.forEach(sheetName => {
           const ws = wb.Sheets[sheetName];
-          const sheetRows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+          // Use a large range to ensure we don't miss columns if the first ones are empty
+          const sheetRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, blankrows: true });
           if (sheetRows.length > 0) {
-            // Add sheet name as a virtual column if needed, but for now just concat
             allRawRows = [...allRawRows, ...sheetRows];
           }
         });
         
         if (allRawRows.length === 0) {
           alert("The Excel file seems to be empty.");
+          setLoading(false);
           return;
         }
 
-        const parsedTasksRaw = await parseExcelDataWithAI(allRawRows);
+        setLoadingMessage('AI is parsing data... (this may take a minute)');
+        const parsedTasksRaw = await parseExcelDataWithAI(allRawRows, (msg) => setLoadingMessage(msg));
+        
+        if (parsedTasksRaw.length === 0) {
+          alert("No valid data rows found in the Excel file. Please check the column mapping.");
+          setLoading(false);
+          return;
+        }
+
+        alert(`Successfully processed ${parsedTasksRaw.length} items from the Excel file.`);
         
         // Post-process to ensure IDs are unique
         const idSet = new Set<string>();
@@ -503,13 +515,13 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (activeTab === 'timeline') {
+    if (activeTab === 'timeline' && !activeTimelinePoint) {
       // Small delay to ensure the DOM is rendered
       setTimeout(() => {
         scrollToToday();
       }, 100);
     }
-  }, [activeTab]);
+  }, [activeTab, activeTimelinePoint]);
 
   const stats = {
     totalProjects: Object.keys(groupedTasks).length,
@@ -569,8 +581,8 @@ export default function App() {
           >
             <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
             <div className="text-center">
-              <p className="font-bold text-lg text-[#1A1C1E]">Processing Data with AI...</p>
-              <p className="text-sm text-[#44474E]">This may take up to 30 seconds for large files.</p>
+              <p className="font-bold text-lg text-[#1A1C1E]">{loadingMessage || 'Processing Data with AI...'}</p>
+              <p className="text-sm text-[#44474E]">Please wait while we process your request.</p>
             </div>
           </motion.div>
         )}
