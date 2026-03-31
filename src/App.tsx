@@ -10,7 +10,7 @@ import {
   RefreshCw, Share2, LogIn, Volume2, VolumeX
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { format, parseISO, differenceInDays, addDays, startOfMonth, endOfMonth, eachDayOfInterval, isWithinInterval, isValid } from 'date-fns';
+import { format, parseISO, differenceInDays, addDays, startOfMonth, endOfMonth, eachDayOfInterval, isWithinInterval, isValid, isAfter } from 'date-fns';
 import ReactMarkdown from 'react-markdown';
 import { parseExcelDataWithAI, askAIAboutSchedule, NPITask } from './services/geminiService';
 
@@ -35,6 +35,7 @@ export default function App() {
   const [projectNotes, setProjectNotes] = useState<Record<string, string>>({});
   const [editingTask, setEditingTask] = useState<NPITask | null>(null);
   const [isSilent, setIsSilent] = useState(() => localStorage.getItem('ai_silent') === 'true');
+  const [activeTimelinePoint, setActiveTimelinePoint] = useState<{ task: NPITask, key: string, date: string } | null>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
 
   // Load from localStorage on mount
@@ -80,18 +81,24 @@ export default function App() {
         if (!data) throw new Error("No data read from file");
         
         const wb = XLSX.read(data, { type: 'array' });
-        const wsname = wb.SheetNames[0];
-        const ws = wb.Sheets[wsname];
         
-        // Use raw rows (header: 1) to be more robust for AI parsing
-        const rawRows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+        // Read all sheets and concatenate data
+        let allRawRows: any[] = [];
+        wb.SheetNames.forEach(sheetName => {
+          const ws = wb.Sheets[sheetName];
+          const sheetRows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+          if (sheetRows.length > 0) {
+            // Add sheet name as a virtual column if needed, but for now just concat
+            allRawRows = [...allRawRows, ...sheetRows];
+          }
+        });
         
-        if (rawRows.length === 0) {
+        if (allRawRows.length === 0) {
           alert("The Excel file seems to be empty.");
           return;
         }
 
-        const parsedTasksRaw = await parseExcelDataWithAI(rawRows);
+        const parsedTasksRaw = await parseExcelDataWithAI(allRawRows);
         
         // Post-process to ensure IDs are unique
         const idSet = new Set<string>();
@@ -194,7 +201,28 @@ export default function App() {
         startDate: format(new Date(), 'yyyy-MM-dd'),
         endDate: format(addDays(new Date(), 90), 'yyyy-MM-dd'),
         milestones: { beta: format(addDays(new Date(), 30), 'yyyy-MM-dd') },
-        timelinePoints: { toolingStart: format(new Date(), 'yyyy-MM-dd'), t1: format(addDays(new Date(), 15), 'yyyy-MM-dd') }
+        timelinePoints: { toolingStart: format(new Date(), 'yyyy-MM-dd'), t1: format(addDays(new Date(), 15), 'yyyy-MM-dd') },
+        issues: [
+          { trial: 'T1', description: 'Surface scratch', status: 'open', severity: 'medium', category: 'Cosmetic' },
+          { trial: 'T1', description: 'Dimension out of spec', status: 'open', severity: 'high', category: 'Function' }
+        ]
+      },
+      {
+        id: 'sample-2',
+        project: 'Project Beta',
+        projectDescription: 'Front Cover Tooling',
+        partNo: 'FC-002',
+        molder: 'Molder B',
+        odm: 'ODM Y',
+        currentStage: 'T0',
+        latestStatus: 'Delay in tooling start',
+        startDate: format(new Date(), 'yyyy-MM-dd'),
+        endDate: format(addDays(new Date(), 120), 'yyyy-MM-dd'),
+        milestones: { beta: format(addDays(new Date(), 45), 'yyyy-MM-dd') },
+        timelinePoints: { toolingStart: format(addDays(new Date(), 5), 'yyyy-MM-dd') },
+        issues: [
+          { trial: 'T0', description: 'ECN change for latch', status: 'open', severity: 'high', category: 'ECN' }
+        ]
       }
     ];
     setTasks(sampleTasks);
@@ -408,6 +436,46 @@ export default function App() {
     }
   };
 
+  const deleteIssue = (taskId: string, issueLine: string) => {
+    setTasks(prev => prev.map(t => {
+      if (t.id === taskId) {
+        const lines = (t.latestStatus || '').split(/\n|;|\./);
+        const filteredLines = lines.filter(l => l.trim() !== issueLine.trim());
+        return { ...t, latestStatus: filteredLines.join('. ') };
+      }
+      return t;
+    }));
+  };
+
+  const toggleIssueCategory = (taskId: string, issueLine: string) => {
+    setTasks(prev => prev.map(task => {
+      if (task.id !== taskId) return task;
+      
+      const categories: ('Function' | 'Cosmetic' | 'ECN' | 'Other')[] = ['Function', 'Cosmetic', 'ECN', 'Other'];
+      const issues = [...(task.issues || [])];
+      const matchedIdx = issues.findIndex(i => 
+        issueLine.toLowerCase().includes(i.description.toLowerCase()) || 
+        i.description.toLowerCase().includes(issueLine.toLowerCase())
+      );
+
+      if (matchedIdx > -1) {
+        const currentCat = issues[matchedIdx].category;
+        const nextCat = categories[(categories.indexOf(currentCat) + 1) % categories.length];
+        issues[matchedIdx] = { ...issues[matchedIdx], category: nextCat };
+      } else {
+        issues.push({
+          trial: 'Latest',
+          description: issueLine,
+          status: 'open',
+          severity: 'medium',
+          category: 'Function'
+        });
+      }
+      
+      return { ...task, issues };
+    }));
+  };
+
   const stats = {
     totalProjects: Object.keys(groupedTasks).length,
     totalParts: filteredTasks.length,
@@ -415,12 +483,39 @@ export default function App() {
     alerts: filteredTasks.filter(t => (t.latestStatus || '').toLowerCase().includes('delay')).length,
   };
 
+  const getPendingIssuesCount = (projectTasks: NPITask[]) => {
+    return projectTasks.reduce((count, task) => {
+      const explicitIssues = (task.issues || []).filter(i => i.status === 'open').length;
+      const statusText = (task.latestStatus || '').toLowerCase();
+      const keywords = ['delay', 'issue', 'problem', 'fail', 'ng'];
+      const lines = statusText.split(/\n|;|\./).filter(l => l.trim().length > 5);
+      const textIssues = lines.filter(line => keywords.some(k => line.toLowerCase().includes(k))).length;
+      return count + Math.max(explicitIssues, textIssues);
+    }, 0);
+  };
+
   const stageData = Object.entries(
     filteredTasks.reduce((acc, t) => {
-      acc[t.currentStage] = (acc[t.currentStage] || 0) + 1;
+      const stage = t.currentStage || 'N/A';
+      acc[stage] = (acc[stage] || 0) + 1;
       return acc;
     }, {} as Record<string, number>)
   ).map(([name, value]) => ({ name, value }));
+
+  const projectHealthData = Object.entries(groupedTasks).map(([projectName, projectTasks]) => {
+    const issues = projectTasks.flatMap(t => t.issues || []);
+    const categories = {
+      Function: issues.filter(i => i.category === 'Function' && i.status === 'open').length,
+      Cosmetic: issues.filter(i => i.category === 'Cosmetic' && i.status === 'open').length,
+      ECN: issues.filter(i => i.category === 'ECN' && i.status === 'open').length,
+      Other: issues.filter(i => i.category === 'Other' && i.status === 'open').length,
+    };
+    return {
+      name: projectName,
+      ...categories,
+      total: Object.values(categories).reduce((a, b) => a + b, 0)
+    };
+  }).filter(d => d.total > 0);
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-[#1A1C1E] font-sans">
@@ -697,25 +792,21 @@ export default function App() {
                       </ResponsiveContainer>
                     </div>
                   </div>
-                  <div className="bg-white p-6 rounded-3xl border border-[#E1E3E1] shadow-sm flex flex-col justify-center items-center">
-                    <h3 className="text-lg font-bold mb-4">Project Health</h3>
+                  <div className="bg-white p-6 rounded-3xl border border-[#E1E3E1] shadow-sm flex flex-col">
+                    <h3 className="text-lg font-bold mb-4">Project Health (Open Issues)</h3>
                     <div className="h-64 w-full">
                       <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie
-                            data={stageData}
-                            innerRadius={60}
-                            outerRadius={80}
-                            paddingAngle={5}
-                            dataKey="value"
-                          >
-                            {stageData.map((entry, index) => (
-                              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                            ))}
-                          </Pie>
-                          <Tooltip />
+                        <BarChart data={projectHealthData} layout="vertical" margin={{ left: 20 }}>
+                          <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} />
+                          <XAxis type="number" axisLine={false} tickLine={false} />
+                          <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} width={80} />
+                          <Tooltip cursor={{fill: '#f3f4f6'}} contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)'}} />
                           <Legend />
-                        </PieChart>
+                          <Bar dataKey="Function" stackId="a" fill="#ef4444" radius={[0, 0, 0, 0]} />
+                          <Bar dataKey="Cosmetic" stackId="a" fill="#3b82f6" radius={[0, 0, 0, 0]} />
+                          <Bar dataKey="ECN" stackId="a" fill="#f59e0b" radius={[0, 0, 0, 0]} />
+                          <Bar dataKey="Other" stackId="a" fill="#6b7280" radius={[0, 4, 4, 0]} />
+                        </BarChart>
                       </ResponsiveContainer>
                     </div>
                   </div>
@@ -732,38 +823,50 @@ export default function App() {
                       Go to Today
                     </button>
                   </div>
-                  <div className="p-6 space-y-8">
-                    {Object.entries(groupedTasks).map(([projectName, projectTasks]) => (
-                      <div key={projectName} className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pb-8 border-b border-[#F0F0F0] last:border-0">
-                        <div className="lg:col-span-3">
-                          <h4 className="font-bold text-[#1A1C1E] text-lg">{projectName}</h4>
-                          <p className="text-xs text-gray-500 mb-2">{projectTasks.length} parts</p>
-                          <div className="flex flex-wrap gap-1">
-                            {Array.from(new Set(projectTasks.map(t => t.currentStage))).map(stage => (
-                              <span key={stage} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-lg text-[9px] font-bold uppercase">
-                                {stage}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
+                    <div className="p-6 space-y-8">
+                      {Object.entries(groupedTasks).map(([projectName, projectTasks]) => {
+                        const pendingIssues = getPendingIssuesCount(projectTasks);
+                        const nextMilestone = getNextMilestone(projectTasks);
                         
-                        <div className="lg:col-span-6">
-                          {/* Show timeline for the first part of the project as a representative */}
-                          <ProjectMiniTimeline task={projectTasks[0]} />
-                        </div>
+                        return (
+                          <div key={projectName} className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pb-8 border-b border-[#F0F0F0] last:border-0">
+                            <div className="lg:col-span-3">
+                              <h4 className="font-bold text-[#1A1C1E] text-lg">{projectName}</h4>
+                              <p className="text-xs text-gray-500 mb-3">{projectTasks.length} parts</p>
+                              
+                              <div className="space-y-3">
+                                <div className="flex items-center gap-2">
+                                  <div className={`px-2 py-1 rounded-lg text-[10px] font-bold uppercase border ${pendingIssues > 0 ? 'bg-red-50 text-red-700 border-red-100' : 'bg-emerald-50 text-emerald-700 border-emerald-100'}`}>
+                                    {pendingIssues} Pending Issues
+                                  </div>
+                                </div>
+                              </div>
 
-                        <div className="lg:col-span-4">
-                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 block">Project Notes</label>
-                          <textarea 
-                            placeholder="Add project notes, risks, or updates..."
-                            value={projectNotes[projectName] || ''}
-                            onChange={(e) => handleNoteChange(projectName, e.target.value)}
-                            className="w-full min-h-[120px] bg-[#F8F9FA] border border-[#E1E3E1] rounded-2xl p-4 text-sm focus:ring-2 focus:ring-blue-500 outline-none resize shadow-inner"
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                              <div className="flex flex-wrap gap-1 mt-4">
+                                {Array.from(new Set(projectTasks.map(t => t.currentStage))).map(stage => (
+                                  <span key={stage} className="px-2 py-1 bg-gray-50 text-gray-600 rounded-lg text-[9px] font-bold uppercase">
+                                    {stage}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                            
+                            <div className="lg:col-span-12 mt-4">
+                              <ProjectPipeStack projectTasks={projectTasks} />
+                              <div className="mt-4 p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 block">Project Notes</label>
+                                <textarea 
+                                  placeholder="Add project notes, risks, or updates..."
+                                  value={projectNotes[projectName] || ''}
+                                  onChange={(e) => handleNoteChange(projectName, e.target.value)}
+                                  className="w-full min-h-[80px] bg-transparent border-none p-0 text-sm focus:ring-0 outline-none resize-none"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                 </div>
               </motion.div>
             )}
@@ -799,9 +902,14 @@ export default function App() {
                   </div>
                 </div>
                 <div className="overflow-hidden" ref={timelineRef}>
-                  <GanttChart tasks={filteredTasks} onEdit={setEditingTask} onUpdateTask={(updatedTask) => {
-                    setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
-                  }} />
+                  <GanttChart 
+                    tasks={filteredTasks} 
+                    onEdit={setEditingTask} 
+                    onUpdateTask={(updatedTask) => {
+                      setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
+                    }} 
+                    onPointClick={(task, key, date) => setActiveTimelinePoint({ task, key, date })}
+                  />
                 </div>
               </motion.div>
             )}
@@ -824,6 +932,7 @@ export default function App() {
                         <th className="p-4 font-semibold text-sm w-48">ODM</th>
                         <th className="p-4 font-semibold text-sm w-48">Stage</th>
                         <th className="p-4 font-semibold text-sm w-96">Status / Issues</th>
+                        <th className="p-4 font-semibold text-sm w-32">DFM</th>
                         <th className="p-4 font-semibold text-sm w-32">Tooling Start</th>
                         <th className="p-4 font-semibold text-sm w-32">T1</th>
                         <th className="p-4 font-semibold text-sm w-32">T2</th>
@@ -842,12 +951,12 @@ export default function App() {
                           <td className="p-4 text-sm font-medium sticky left-0 bg-white group-hover:bg-gray-50 z-10 border-r border-[#E1E3E1]">
                             <div className="flex flex-col gap-1">
                               <input 
-                                value={task.project} 
+                                value={task.project || ''} 
                                 onChange={(e) => handleTableEdit(task.id, 'project', e.target.value)}
                                 className="bg-transparent border-none outline-none w-full font-bold text-blue-700"
                               />
                               <textarea 
-                                value={task.projectDescription} 
+                                value={task.projectDescription || ''} 
                                 onChange={(e) => handleTableEdit(task.id, 'projectDescription', e.target.value)}
                                 className="bg-transparent border-none outline-none w-full text-[10px] text-gray-500 resize-none h-8"
                               />
@@ -855,44 +964,44 @@ export default function App() {
                           </td>
                           <td className="p-4 text-sm">
                             <input 
-                              value={task.partNo} 
+                              value={task.partNo || ''} 
                               onChange={(e) => handleTableEdit(task.id, 'partNo', e.target.value)}
                               className="bg-transparent border-none outline-none w-full"
                             />
                           </td>
                           <td className="p-4 text-sm">
                             <input 
-                              value={task.molder} 
+                              value={task.molder || ''} 
                               onChange={(e) => handleTableEdit(task.id, 'molder', e.target.value)}
                               className="bg-transparent border-none outline-none w-full"
                             />
                           </td>
                           <td className="p-4 text-sm">
                             <input 
-                              value={task.odm} 
+                              value={task.odm || ''} 
                               onChange={(e) => handleTableEdit(task.id, 'odm', e.target.value)}
                               className="bg-transparent border-none outline-none w-full"
                             />
                           </td>
                           <td className="p-4 text-sm">
                             <input 
-                              value={task.currentStage} 
+                              value={task.currentStage || ''} 
                               onChange={(e) => handleTableEdit(task.id, 'currentStage', e.target.value)}
                               className="bg-transparent border-none outline-none w-full font-bold"
                             />
                           </td>
                           <td className={`p-4 text-sm font-medium ${isStatusUpdated(task) ? 'text-blue-600' : 'text-[#44474E]'}`}>
                             <textarea 
-                              value={task.latestStatus} 
+                              value={task.latestStatus || ''} 
                               onChange={(e) => handleTableEdit(task.id, 'latestStatus', e.target.value)}
                               className="bg-transparent border-none outline-none w-full whitespace-normal break-words min-h-[60px] resize-y"
                             />
                           </td>
-                          {['toolingStart', 't1', 't2', 't3', 't4', 't5'].map(t => (
+                          {['dfm', 'toolingStart', 't1', 't2', 't3', 't4', 't5'].map(t => (
                             <td key={t} className="p-4 text-xs">
                               <input 
                                 type="date"
-                                value={(task.timelinePoints as any)[t] || ''} 
+                                value={(task.timelinePoints || {} as any)[t] || ''} 
                                 onChange={(e) => handleTableEdit(task.id, `timelinePoints.${t}`, e.target.value)}
                                 className="bg-transparent border-none outline-none w-full"
                               />
@@ -902,7 +1011,7 @@ export default function App() {
                             <td key={m} className="p-4 text-xs">
                               <input 
                                 type="date"
-                                value={(task.milestones as any)[m] || ''} 
+                                value={(task.milestones || {} as any)[m] || ''} 
                                 onChange={(e) => handleTableEdit(task.id, `milestones.${m}`, e.target.value)}
                                 className="bg-transparent border-none outline-none w-full"
                               />
@@ -968,17 +1077,40 @@ export default function App() {
                             </div>
                           </div>
                           <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-3">
-                              <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
-                              <span className="text-xs font-bold text-red-600 uppercase tracking-wider">Detected Issue</span>
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
+                                <span className="text-xs font-bold text-red-600 uppercase tracking-wider">Detected Issue</span>
+                              </div>
+                              {(() => {
+                                const matchedIssue = task.issues?.find(i => 
+                                  issueLine.toLowerCase().includes(i.description.toLowerCase()) || 
+                                  i.description.toLowerCase().includes(issueLine.toLowerCase())
+                                );
+                                return (
+                                  <button 
+                                    onClick={() => toggleIssueCategory(task.id, issueLine)}
+                                    className={`px-2 py-1 rounded-lg text-[10px] font-bold uppercase border transition-all hover:scale-105 active:scale-95 ${
+                                      matchedIssue?.category 
+                                        ? 'bg-purple-50 text-purple-700 border-purple-100' 
+                                        : 'bg-gray-50 text-gray-500 border-gray-200'
+                                    }`}
+                                  >
+                                    {matchedIssue?.category || 'Uncategorized'}
+                                  </button>
+                                );
+                              })()}
                             </div>
                             <div className="text-sm text-[#44474E] leading-relaxed bg-gray-50 p-4 rounded-2xl border border-[#F0F0F0] italic">
                               "{issueLine.trim()}"
                             </div>
                           </div>
                           <div className="md:w-32 shrink-0 flex flex-col gap-2 self-center">
-                            <button className="w-full py-2.5 bg-white border border-[#E1E3E1] rounded-xl text-xs font-bold hover:bg-gray-50 transition-colors shadow-sm">
-                              Assign
+                            <button 
+                              onClick={() => deleteIssue(task.id, issueLine)}
+                              className="w-full py-2.5 bg-red-50 text-red-600 border border-red-100 rounded-xl text-xs font-bold hover:bg-red-100 transition-colors shadow-sm"
+                            >
+                              Delete
                             </button>
                             <button className="w-full py-2.5 bg-[#0061A4] text-white rounded-xl text-xs font-bold hover:bg-[#004A7D] transition-colors shadow-lg shadow-blue-100">
                               Resolve
@@ -1108,7 +1240,7 @@ export default function App() {
                     />
                   </div>
                 ))}
-                {Object.keys(editingTask.timelinePoints).map(p => (
+                {['dfm', 'toolingStart', 't1', 't2', 't3', 't4', 't5'].map(p => (
                   <div key={p}>
                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1">{p}</label>
                     <input 
@@ -1130,6 +1262,98 @@ export default function App() {
               >
                 Done
               </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Timeline Point Status Popup */}
+      <AnimatePresence>
+        {activeTimelinePoint && (
+          <div className="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setActiveTimelinePoint(null)}>
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-white rounded-3xl p-8 max-w-lg w-full shadow-2xl border border-blue-100"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex justify-between items-start mb-6">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded-lg text-[10px] font-bold uppercase border border-blue-100">
+                      {activeTimelinePoint.key.toUpperCase()}
+                    </span>
+                    <span className="text-xs text-gray-400 font-medium">
+                      {format(parseISO(activeTimelinePoint.date), 'MMM dd, yyyy')}
+                    </span>
+                  </div>
+                  <h3 className="text-xl font-bold text-[#1A1C1E]">{activeTimelinePoint.task.projectDescription}</h3>
+                  <p className="text-xs text-gray-500 font-mono mt-1">{activeTimelinePoint.task.partNo}</p>
+                </div>
+                <button 
+                  onClick={() => setActiveTimelinePoint(null)}
+                  className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+                >
+                  <RefreshCw className="w-5 h-5 text-gray-400 rotate-45" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div className="bg-blue-50/50 p-6 rounded-2xl border border-blue-100">
+                  <div className="flex items-center gap-2 mb-3">
+                    <MessageSquare className="w-4 h-4 text-blue-600" />
+                    <span className="text-xs font-bold text-blue-700 uppercase tracking-wider">Latest Status</span>
+                  </div>
+                  <div className="text-sm text-[#44474E] leading-relaxed whitespace-pre-wrap">
+                    {activeTimelinePoint.task.latestStatus || 'No status updates available for this part.'}
+                  </div>
+                </div>
+
+                {activeTimelinePoint.task.issues && activeTimelinePoint.task.issues.length > 0 && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-3 px-1">
+                      <AlertCircle className="w-4 h-4 text-red-500" />
+                      <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Related Issues</span>
+                    </div>
+                    <div className="space-y-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
+                      {activeTimelinePoint.task.issues.map((issue, idx) => (
+                        <div key={idx} className="p-3 bg-white border border-[#F0F0F0] rounded-xl flex items-center justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs text-[#44474E] truncate">{issue.description}</p>
+                          </div>
+                          <span className={`shrink-0 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase ${
+                            issue.category === 'Function' ? 'bg-red-50 text-red-600' :
+                            issue.category === 'Cosmetic' ? 'bg-amber-50 text-amber-600' :
+                            issue.category === 'ECN' ? 'bg-purple-50 text-purple-600' :
+                            'bg-gray-50 text-gray-600'
+                          }`}>
+                            {issue.category}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-8 flex gap-3">
+                <button 
+                  onClick={() => {
+                    setEditingTask(activeTimelinePoint.task);
+                    setActiveTimelinePoint(null);
+                  }}
+                  className="flex-1 py-3 bg-[#0061A4] text-white rounded-xl font-bold text-sm hover:bg-[#004A7D] transition-all shadow-lg shadow-blue-100"
+                >
+                  Edit Part Details
+                </button>
+                <button 
+                  onClick={() => setActiveTimelinePoint(null)}
+                  className="px-6 py-3 bg-gray-100 text-gray-600 rounded-xl font-bold text-sm hover:bg-gray-200 transition-all"
+                >
+                  Close
+                </button>
+              </div>
             </motion.div>
           </div>
         )}
@@ -1166,8 +1390,18 @@ function StatCard({ label, value, icon }: { label: string, value: number | strin
   );
 }
 
-function GanttChart({ tasks, onEdit, onUpdateTask }: { tasks: NPITask[], onEdit: (task: NPITask) => void, onUpdateTask: (task: NPITask) => void }) {
+function GanttChart({ tasks, onEdit, onUpdateTask, onPointClick }: { tasks: NPITask[], onEdit: (task: NPITask) => void, onUpdateTask: (task: NPITask) => void, onPointClick: (task: NPITask, key: string, date: string) => void }) {
+  const [expandedProjects, setExpandedProjects] = useState<string[]>([]);
+  
   if (tasks.length === 0) return null;
+
+  const toggleProject = (projectName: string) => {
+    setExpandedProjects(prev => 
+      prev.includes(projectName) 
+        ? prev.filter(p => p !== projectName) 
+        : [...prev, projectName]
+    );
+  };
 
   const validTasks = tasks.filter(t => {
     const s = parseISO(t.startDate);
@@ -1181,10 +1415,21 @@ function GanttChart({ tasks, onEdit, onUpdateTask }: { tasks: NPITask[], onEdit:
     </div>
   );
 
+  const groupedValidTasks = validTasks.reduce((acc, task) => {
+    if (!acc[task.project]) acc[task.project] = [];
+    acc[task.project].push(task);
+    return acc;
+  }, {} as Record<string, NPITask[]>);
+
   const startDates = validTasks.map(t => parseISO(t.startDate));
-  const endDates = validTasks.map(t => parseISO(t.endDate));
+  const endDates = [
+    ...validTasks.map(t => parseISO(t.endDate)),
+    ...validTasks.flatMap(t => Object.values(t.milestones || {}).map(d => parseISO(d!))),
+    ...validTasks.flatMap(t => Object.values(t.timelinePoints || {}).map(d => parseISO(d!)))
+  ].filter(d => isValid(d));
+
   const minDate = startOfMonth(new Date(Math.min(...startDates.map(d => d.getTime()))));
-  const maxDate = endOfMonth(new Date(Math.max(...endDates.map(d => d.getTime()))));
+  const maxDate = endOfMonth(addDays(new Date(Math.max(...endDates.map(d => d.getTime()))), 90)); // + 3 months
   
   if (!isValid(minDate) || !isValid(maxDate)) return null;
 
@@ -1254,91 +1499,289 @@ function GanttChart({ tasks, onEdit, onUpdateTask }: { tasks: NPITask[], onEdit:
           </div>
           
           <div className="divide-y divide-[#F0F0F0]">
-            {validTasks.map((task) => {
+            {Object.entries(groupedValidTasks).map(([projectName, projectTasks]) => {
+              const isExpanded = expandedProjects.includes(projectName);
+              // Use the first task's milestones as project milestones
+              const projectTask = projectTasks[0];
+              
               return (
-                <div key={task.id} className="flex items-center group hover:bg-gray-50/50 transition-colors" style={{ width: 256 + days.length * dayWidth }}>
-                  <div 
-                    className="w-64 sticky left-0 bg-white z-40 p-4 text-xs font-medium border-r border-[#E1E3E1] group-hover:bg-gray-50 cursor-pointer shadow-[4px_0_8px_-4px_rgba(0,0,0,0.05)]"
-                    onClick={() => onEdit(task)}
-                  >
-                    <div className="font-bold text-[#0061A4] mb-1">{task.project}</div>
-                    <div className="text-[11px] text-[#44474E] line-clamp-2 leading-tight mb-1">{task.projectDescription}</div>
-                    <div className="text-[10px] text-gray-400 font-mono">{task.partNo}</div>
-                  </div>
-                  <div className="relative h-20 flex-none" style={{ width: days.length * dayWidth }}>
-                    {/* Vertical Grid Lines */}
-                    <div className="absolute inset-0 flex pointer-events-none">
-                      {days.map((_, i) => (
-                        <div 
-                          key={i} 
-                          className="border-l border-[#F0F0F0] h-full flex-none" 
-                          style={{ width: dayWidth }}
-                        />
-                      ))}
+                <React.Fragment key={projectName}>
+                  {/* Project Milestone Row */}
+                  <div className="flex items-center bg-blue-50/30 group hover:bg-blue-50/50 transition-colors relative" style={{ width: 256 + days.length * dayWidth }}>
+                    <div 
+                      className="w-64 sticky left-0 bg-blue-50 z-[45] p-4 text-xs font-medium border-r border-[#E1E3E1] cursor-pointer shadow-[4px_0_8px_-4px_rgba(0,0,0,0.05)] flex items-center justify-between"
+                      onClick={() => toggleProject(projectName)}
+                    >
+                      <div className="flex flex-col gap-1">
+                        <div className="font-bold text-[#0061A4] text-sm flex items-center gap-2">
+                          {projectName}
+                          {getNextMilestone(projectTasks) && (
+                            <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-bold">
+                              Next: {getNextMilestone(projectTasks)?.name.toUpperCase()}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-blue-600 font-bold uppercase mt-1 tracking-wider flex items-center gap-1">
+                          <ChevronRight className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                          Project Milestones
+                        </div>
+                      </div>
+                      <div className="text-[10px] bg-white px-2 py-1 rounded-lg border border-blue-100 text-blue-700 font-bold">
+                        {projectTasks.length}
+                      </div>
                     </div>
-                {/* Milestones (Red Dots) */}
-                {Object.entries(task.milestones || {}).map(([key, date]) => {
-                  if (!date) return null;
-                  const d = parseISO(date);
-                  if (!isValid(d)) return null;
-                  const offset = (differenceInDays(d, minDate) || 0) * dayWidth;
-                  if (isNaN(offset)) return null;
-                  return (
-                    <motion.div 
-                      key={key}
-                      drag="x"
-                      dragConstraints={{ left: -offset, right: (days.length * dayWidth) - offset }}
-                      dragElastic={0}
-                      dragMomentum={false}
-                      whileDrag={{ scale: 1.3, zIndex: 50 }}
-                      onDragEnd={(_, info) => handleDragEnd(task, 'milestone', key, info)}
-                      className="absolute top-2 w-3 h-3 bg-red-600 rounded-full transform -translate-x-1/2 z-10 shadow-sm cursor-grab active:cursor-grabbing hover:scale-125 transition-all duration-200"
-                      style={{ left: offset }}
-                      onClick={(e) => { e.stopPropagation(); onEdit(task); }}
-                      title={`${key.toUpperCase()}: ${date} (Drag to move)`}
-                    >
-                      <span className="absolute -top-4 left-1/2 transform -translate-x-1/2 text-[8px] font-bold text-red-700 whitespace-nowrap bg-white/80 px-1 rounded">
-                        {key.toUpperCase()}
-                      </span>
-                    </motion.div>
-                  );
-                })}
+                    <div className="relative h-16 flex-none" style={{ width: days.length * dayWidth }}>
+                      {/* Vertical Grid Lines */}
+                      <div className="absolute inset-0 flex pointer-events-none">
+                        {days.map((_, i) => (
+                          <div 
+                            key={i} 
+                            className="border-l border-[#F0F0F0] h-full flex-none" 
+                            style={{ width: dayWidth }}
+                          />
+                        ))}
+                      </div>
+                      
+                      {/* Project Milestones (Red Dots) */}
+                      {Object.entries(projectTask.milestones || {}).map(([key, date]) => {
+                        if (!date) return null;
+                        const d = parseISO(date);
+                        if (!isValid(d)) return null;
+                        const offset = (differenceInDays(d, minDate) || 0) * dayWidth;
+                        if (isNaN(offset)) return null;
+                        return (
+                          <motion.div 
+                            key={key}
+                            drag="x"
+                            dragConstraints={{ left: -offset, right: (days.length * dayWidth) - offset }}
+                            dragElastic={0}
+                            dragMomentum={false}
+                            whileDrag={{ scale: 1.3, zIndex: 50 }}
+                            onDragEnd={(_, info) => handleDragEnd(projectTask, 'milestone', key, info)}
+                            className="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-red-600 rounded-full transform -translate-x-1/2 z-10 shadow-lg cursor-grab active:cursor-grabbing hover:scale-125 transition-all duration-200"
+                            style={{ left: offset }}
+                            title={`${key.toUpperCase()}: ${date} (Project Milestone)`}
+                          >
+                            <span className="absolute -top-6 left-1/2 transform -translate-x-1/2 text-[9px] font-black text-red-700 whitespace-nowrap bg-white/90 px-1.5 py-0.5 rounded-full border border-red-100 shadow-sm">
+                              {key.toUpperCase()}
+                            </span>
+                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-white rounded-full"></div>
+                          </motion.div>
+                        );
+                      })}
+                    </div>
+                  </div>
 
-                {/* Events (Blue Dots) */}
-                {Object.entries(task.timelinePoints || {}).map(([key, date]) => {
-                  if (!date) return null;
-                  const d = parseISO(date);
-                  if (!isValid(d)) return null;
-                  const offset = (differenceInDays(d, minDate) || 0) * dayWidth;
-                  if (isNaN(offset)) return null;
-                  return (
-                    <motion.div 
-                      key={key}
-                      drag="x"
-                      dragConstraints={{ left: -offset, right: (days.length * dayWidth) - offset }}
-                      dragElastic={0}
-                      dragMomentum={false}
-                      whileDrag={{ scale: 1.3, zIndex: 50 }}
-                      onDragEnd={(_, info) => handleDragEnd(task, 'point', key, info)}
-                      className="absolute top-8 w-2 h-2 bg-blue-600 rounded-full transform -translate-x-1/2 z-10 cursor-grab active:cursor-grabbing hover:scale-125 transition-all duration-200"
-                      style={{ left: offset }}
-                      onClick={(e) => { e.stopPropagation(); onEdit(task); }}
-                      title={`${key.toUpperCase()}: ${date} (Drag to move)`}
-                    >
-                      <span className="absolute top-3 left-1/2 transform -translate-x-1/2 text-[8px] font-bold text-blue-700 whitespace-nowrap bg-white/80 px-1 rounded">
-                        {key.toUpperCase()}
-                      </span>
-                    </motion.div>
-                  );
-                })}
-              </div>
+                  {/* Sub-parts Rows */}
+                  <AnimatePresence>
+                    {isExpanded && projectTasks.map((task) => (
+                      <div 
+                        key={task.id}
+                        className="flex items-center group hover:bg-gray-50/50 transition-colors" 
+                        style={{ width: 256 + days.length * dayWidth }}
+                      >
+                        <div 
+                          className="w-64 sticky left-0 bg-white z-[45] p-4 pl-8 text-xs font-medium border-r border-[#E1E3E1] group-hover:bg-gray-50 cursor-pointer shadow-[4px_0_8px_-4px_rgba(0,0,0,0.05)]"
+                          onClick={() => onEdit(task)}
+                        >
+                          <div className="flex items-start justify-between gap-2 mb-1">
+                            <div className="text-[11px] text-[#1A1C1E] font-bold line-clamp-1 leading-tight">{task.projectDescription || 'No description'}</div>
+                            {task.issues && task.issues.filter(i => i.status === 'open').length > 0 && (
+                              <div className="flex flex-wrap gap-0.5 shrink-0 justify-end max-w-[80px]">
+                                {Array.from(new Set(task.issues.filter(i => i.status === 'open').map(i => i.category))).map(cat => (
+                                  <span key={cat} className="px-1 py-0.5 rounded-[4px] bg-red-50 text-red-600 text-[7px] font-black uppercase border border-red-100 leading-none" title={cat}>
+                                    {cat.substring(0, 3)}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <div className="text-[10px] text-gray-400 font-mono">{task.partNo || 'N/A'}</div>
+                            <div className="text-[9px] px-1.5 py-0.5 bg-gray-100 rounded text-gray-600 font-bold uppercase">{task.currentStage || 'N/A'}</div>
+                          </div>
+                        </div>
+                        <div className="relative h-14 flex-none" style={{ width: days.length * dayWidth }}>
+                          {/* Vertical Grid Lines */}
+                          <div className="absolute inset-0 flex pointer-events-none">
+                            {days.map((_, i) => (
+                              <div 
+                                key={i} 
+                                className="border-l border-[#F0F0F0] h-full flex-none" 
+                                style={{ width: dayWidth }}
+                              />
+                            ))}
+                          </div>
+
+                          {/* Task Duration Bar */}
+                          {(() => {
+                            const start = parseISO(task.startDate);
+                            const end = parseISO(task.endDate);
+                            if (isValid(start) && isValid(end)) {
+                              const left = (differenceInDays(start, minDate) || 0) * dayWidth;
+                              const width = (differenceInDays(end, start) + 1) * dayWidth;
+                              // Use a consistent color based on part number hash
+                              const colors = ['bg-blue-400', 'bg-emerald-400', 'bg-indigo-400', 'bg-purple-400', 'bg-cyan-400'];
+                              const colorIndex = Math.abs(task.partNo.split('').reduce((a, b) => a + b.charCodeAt(0), 0)) % colors.length;
+                              return (
+                                <div 
+                                  className={`absolute top-1/2 -translate-y-1/2 h-4 ${colors[colorIndex]} opacity-60 rounded-full z-0 shadow-sm`}
+                                  style={{ left, width }}
+                                />
+                              );
+                            }
+                            return null;
+                          })()}
+
+                          {/* Timeline Points (Blue Dots) - Only Tooling Start, T1, T2... */}
+                          {Object.entries(task.timelinePoints || {}).map(([key, date]) => {
+                            if (!date) return null;
+                            const d = parseISO(date);
+                            if (!isValid(d)) return null;
+                            const offset = (differenceInDays(d, minDate) || 0) * dayWidth;
+                            if (isNaN(offset)) return null;
+                            return (
+                              <motion.div 
+                                key={key}
+                                drag="x"
+                                dragConstraints={{ left: -offset, right: (days.length * dayWidth) - offset }}
+                                dragElastic={0}
+                                dragMomentum={false}
+                                whileDrag={{ scale: 1.3, zIndex: 50 }}
+                                onDragEnd={(_, info) => handleDragEnd(task, 'point', key, info)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onPointClick(task, key, date);
+                                }}
+                                className="absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 bg-blue-600 rounded-full transform -translate-x-1/2 z-10 cursor-pointer active:cursor-grabbing hover:scale-125 transition-all duration-200 shadow-sm"
+                                style={{ left: offset }}
+                                title={`${key.toUpperCase()}: ${date}`}
+                              >
+                                <span className="absolute top-4 left-1/2 transform -translate-x-1/2 text-[8px] font-bold text-blue-700 whitespace-nowrap bg-white/80 px-1 rounded">
+                                  {key.toUpperCase()}
+                                </span>
+                              </motion.div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </AnimatePresence>
+                </React.Fragment>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function getNextMilestone(projectTasks: NPITask[]) {
+  const today = new Date();
+  let nextDate: Date | null = null;
+  let nextName = '';
+
+  projectTasks.forEach(task => {
+    Object.entries(task.milestones || {}).forEach(([name, dateStr]) => {
+      if (dateStr) {
+        const d = parseISO(dateStr);
+        if (isValid(d) && isAfter(d, today)) {
+          if (!nextDate || d < nextDate) {
+            nextDate = d;
+            nextName = name;
+          }
+        }
+      }
+    });
+  });
+
+  if (!nextDate) return null;
+  const days = differenceInDays(nextDate, today);
+  return { name: nextName, days, date: nextDate };
+}
+
+function ProjectPipeStack({ projectTasks }: { projectTasks: NPITask[] }) {
+  const projectTask = projectTasks[0];
+  const milestones = projectTask.milestones || {};
+  const today = new Date();
+  const nextMilestone = getNextMilestone(projectTasks);
+  
+  const stages = [
+    { name: 'Beta', date: milestones.beta, color: 'bg-blue-500' },
+    { name: 'Pilot Run', date: milestones.pilotRun, color: 'bg-emerald-500' },
+    { name: 'MP', date: milestones.mp, color: 'bg-amber-500' },
+    { name: 'XF', date: milestones.xf, color: 'bg-purple-500' },
+  ].filter(s => s.date && isValid(parseISO(s.date)));
+
+  if (stages.length === 0) return <div className="h-10 bg-gray-50 rounded-full flex items-center justify-center text-[10px] text-gray-400 italic">No milestones defined</div>;
+
+  const sortedStages = [...stages].sort((a, b) => parseISO(a.date!).getTime() - parseISO(b.date!).getTime());
+  
+  // If only 1 milestone, we can't show a bar, so show a point or a simple bar
+  if (sortedStages.length === 1) {
+    return (
+      <div className="flex items-center gap-4">
+        <div className="flex-1 relative h-10 bg-gray-100 rounded-full overflow-hidden flex items-center px-4">
+          <div className={`${sortedStages[0].color} px-3 py-1 rounded-full text-[10px] font-bold text-white`}>
+            {sortedStages[0].name}: {format(parseISO(sortedStages[0].date!), 'MMM dd')}
+          </div>
+        </div>
+        {nextMilestone && (
+          <div className="shrink-0 text-right">
+            <div className="text-[10px] font-bold text-blue-400 uppercase tracking-wider">Next Milestone</div>
+            <div className="text-sm font-bold text-blue-700">{nextMilestone.name.toUpperCase()}</div>
+            <div className="text-[10px] text-blue-500">{format(nextMilestone.date, 'MMM dd')} ({nextMilestone.days}d)</div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const minTime = parseISO(sortedStages[0].date!).getTime();
+  const maxTime = parseISO(sortedStages[sortedStages.length - 1].date!).getTime();
+  const totalDuration = Math.max(maxTime - minTime, 1);
+
+  return (
+    <div className="flex items-center gap-4">
+      <div className="flex-1 relative h-10 bg-gray-100 rounded-full overflow-hidden flex">
+        {sortedStages.map((stage, i) => {
+          if (i === sortedStages.length - 1) return null;
+          const nextStage = sortedStages[i + 1];
+          const start = parseISO(stage.date!).getTime();
+          const end = parseISO(nextStage.date!).getTime();
+          const width = ((end - start) / totalDuration) * 100;
+          
+          return (
+            <div 
+              key={stage.name} 
+              className={`${stage.color} h-full border-r border-white/20 flex items-center justify-center text-[10px] font-bold text-white overflow-hidden whitespace-nowrap`}
+              style={{ width: `${width}%` }}
+            >
+              {stage.name}
             </div>
           );
         })}
+        
+        {/* Today Marker */}
+        {today.getTime() >= minTime && today.getTime() <= maxTime && (
+          <div 
+            className="absolute top-0 bottom-0 w-1 bg-red-600 z-10"
+            style={{ left: `${((today.getTime() - minTime) / totalDuration) * 100}%` }}
+          >
+            <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-3 h-3 bg-red-600 rounded-full border-2 border-white shadow-sm"></div>
+          </div>
+        )}
       </div>
+
+      {nextMilestone && (
+        <div className="shrink-0 text-right">
+          <div className="text-[10px] font-bold text-blue-400 uppercase tracking-wider">Next Milestone</div>
+          <div className="text-sm font-bold text-blue-700">{nextMilestone.name.toUpperCase()}</div>
+          <div className="text-[10px] text-blue-500">{format(nextMilestone.date, 'MMM dd')} ({nextMilestone.days}d)</div>
+        </div>
+      )}
     </div>
-  </div>
-</div>
   );
 }
 

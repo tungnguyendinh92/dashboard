@@ -30,6 +30,7 @@ export interface NPITask {
     xf?: string;
   };
   timelinePoints: {
+    dfm?: string;
     toolingStart?: string;
     t1?: string;
     t2?: string;
@@ -42,6 +43,7 @@ export interface NPITask {
     description: string;
     status: 'open' | 'closed';
     severity: 'low' | 'medium' | 'high';
+    category: 'Function' | 'Cosmetic' | 'ECN' | 'Other';
   }[];
 }
 
@@ -60,35 +62,68 @@ export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'up
     chunks.push(rawData.slice(i, i + CHUNK_SIZE));
   }
 
-  // Only process first 3 chunks (450 rows) to keep it responsive, or all if needed
-  // Let's do up to 600 rows (4 chunks)
-  const chunksToProcess = chunks.slice(0, 4);
+  // Process all chunks to ensure no data is missed
   const allResults: NPITask[] = [];
-
-  for (const [index, chunk] of chunksToProcess.entries()) {
+  for (const [index, chunk] of chunks.entries()) {
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("AI Request Timeout")), 60000));
     const prompt = `
-      Analyze the following raw data (Chunk ${index + 1}/${chunksToProcess.length}) extracted from an NPI schedule Excel file.
-      Identify the header row (if present in this chunk) and extract all project/part items.
+      You are a professional NPI Data Analyst. Your task is to extract high-precision data from an NPI schedule Excel file.
       
-      Extract the following fields for each item:
+      STRICT COLUMN MAPPING RULES (MANDATORY):
+      - Project Name: Column A (Required)
+      - Project Description: Column B
+      - Part Number: Column C (Required)
+      - Molder: Column D
+      - ODM: Column E
+      - Current Stage: Column F
+      - Latest Status/Issues: Column G (Crucial for issue extraction)
+      - Start Date: Column H (Format: YYYY-MM-DD or similar)
+      - End Date: Column J (Format: YYYY-MM-DD or similar)
+      - DFM: Column U
+      - Tooling Start: Column I
+      - T1: Column V
+      - T2: Column W
+      - T3: Column X
+      - T4: Column Y
+      - T5: Column Z
+      - Beta Milestone: Column AA
+      - Pilot Run Milestone: Column AB
+      - MP Milestone: Column AC
+      - XF Milestone: Column AD
+
+      EXTRACT FOR EACH ITEM:
       - project, projectDescription, partNo, molder, odm, currentStage, latestStatus
-      - startDate, endDate (YYYY-MM-DD)
+      - ALL DATES (startDate, endDate, milestones, timelinePoints) MUST BE IN Format: YYYY-MM-DD.
       - milestones: { beta, pilotRun, mp, xf }
-      - timelinePoints: { toolingStart, t1, t2, t3, t4, t5 }
-      - issues: Array of { trial, description, status, severity }
+      - timelinePoints: { dfm, toolingStart, t1, t2, t3, t4, t5 }
       
-      IMPORTANT: Process ALL rows in this chunk that contain actual data.
-      Each item must have a unique 'id'. Generate it using project, partNo, and chunk index.
+      ISSUE EXTRACTION RULES:
+      - Scan Column G (Latest Status/Issues) and prioritize information associated with the LATEST 'T' trial mentioned (e.g., if T4 and T5 are both mentioned, T5 is the latest update).
+      - Split by bullet points, newlines, or semicolons.
+      - For each issue, identify:
+        - trial: which trial it belongs to (e.g., T1, T2, Beta)
+        - description: the actual problem
+        - status: 'open' (if not mentioned as fixed/closed) or 'closed'
+        - severity: 'low', 'medium', or 'high' (based on keywords like 'critical', 'major', 'minor')
+        - category: MUST be one of ['Function', 'Cosmetic', 'ECN', 'Other']
+      
+      ISSUE CATEGORIZATION LOGIC:
+      - 'Function': Mechanical/Electrical performance, fit, function, dimension out of spec, assembly issues.
+      - 'Cosmetic': Surface finish, color, texture, appearance, scratches, sink marks, flash.
+      - 'ECN': Engineering changes, design updates, drawing revisions.
+      - 'Other': Logistics, material availability, or anything else.
+      
+      IMPORTANT: 
+      - DO NOT SKIP ANY ROW that contains part data or project names.
+      - If a row has a Project Name (Column A) or a Part Number (Column C), it MUST be processed.
+      - If a date is missing or invalid, leave it null/undefined.
+      - Process ALL rows in the provided chunk.
+      - Each item must have a unique 'id' (combine project and partNo if needed). 
       
       Raw Data (Rows): ${JSON.stringify(chunk)}
     `;
 
     try {
-      // 45 second timeout per chunk
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error(`AI Request Timeout on chunk ${index + 1}`)), 45000)
-      );
-
       const generatePromise = ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: prompt,
@@ -121,6 +156,7 @@ export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'up
                 timelinePoints: {
                   type: Type.OBJECT,
                   properties: {
+                    dfm: { type: Type.STRING },
                     toolingStart: { type: Type.STRING },
                     t1: { type: Type.STRING },
                     t2: { type: Type.STRING },
@@ -137,12 +173,13 @@ export const parseExcelDataWithAI = async (rawData: any[], mode: 'replace' | 'up
                       trial: { type: Type.STRING },
                       description: { type: Type.STRING },
                       status: { type: Type.STRING, enum: ['open', 'closed'] },
-                      severity: { type: Type.STRING, enum: ['low', 'medium', 'high'] }
+                      severity: { type: Type.STRING, enum: ['low', 'medium', 'high'] },
+                      category: { type: Type.STRING, enum: ['Function', 'Cosmetic', 'ECN', 'Other'] }
                     }
                   }
                 }
               },
-              required: ['id', 'project', 'projectDescription', 'partNo', 'startDate', 'endDate']
+              required: ['id', 'project', 'partNo']
             }
           }
         }
