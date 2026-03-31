@@ -436,6 +436,32 @@ export default function App() {
     }
   };
 
+  const resolveIssue = (taskId: string, issueLine: string) => {
+    setTasks(prev => prev.map(task => {
+      if (task.id === taskId) {
+        const status = task.latestStatus || '';
+        let newStatus = status;
+        if (status.includes(issueLine) && !issueLine.includes('[SOLVED]')) {
+          newStatus = status.replace(issueLine, `${issueLine} [SOLVED]`);
+        } else if (!status.includes('[SOLVED]')) {
+          newStatus = `${status}\n[SOLVED] ${issueLine}`;
+        }
+
+        // Also update structured issues array to set status to 'closed'
+        const updatedIssues = (task.issues || []).map(i => {
+          if (issueLine.toLowerCase().includes(i.description.toLowerCase()) || 
+              i.description.toLowerCase().includes(issueLine.toLowerCase())) {
+            return { ...i, status: 'closed' as const };
+          }
+          return i;
+        });
+
+        return { ...task, latestStatus: newStatus, issues: updatedIssues };
+      }
+      return task;
+    }));
+  };
+
   const deleteIssue = (taskId: string, issueLine: string) => {
     setTasks(prev => prev.map(t => {
       if (t.id === taskId) {
@@ -476,11 +502,24 @@ export default function App() {
     }));
   };
 
+  useEffect(() => {
+    if (activeTab === 'timeline') {
+      // Small delay to ensure the DOM is rendered
+      setTimeout(() => {
+        scrollToToday();
+      }, 100);
+    }
+  }, [activeTab]);
+
   const stats = {
     totalProjects: Object.keys(groupedTasks).length,
     totalParts: filteredTasks.length,
     activeStages: new Set(filteredTasks.map(t => t.currentStage)).size,
-    alerts: filteredTasks.filter(t => (t.latestStatus || '').toLowerCase().includes('delay')).length,
+    alerts: filteredTasks.filter(t => {
+      const statusText = (t.latestStatus || '').toLowerCase();
+      const lines = statusText.split(/\n|;|\./).filter(l => l.trim().length > 5 && !l.includes('[solved]'));
+      return lines.some(line => line.includes('delay'));
+    }).length,
   };
 
   const getPendingIssuesCount = (projectTasks: NPITask[]) => {
@@ -488,7 +527,7 @@ export default function App() {
       const explicitIssues = (task.issues || []).filter(i => i.status === 'open').length;
       const statusText = (task.latestStatus || '').toLowerCase();
       const keywords = ['delay', 'issue', 'problem', 'fail', 'ng'];
-      const lines = statusText.split(/\n|;|\./).filter(l => l.trim().length > 5);
+      const lines = statusText.split(/\n|;|\./).filter(l => l.trim().length > 5 && !l.toLowerCase().includes('[solved]'));
       const textIssues = lines.filter(line => keywords.some(k => line.toLowerCase().includes(k))).length;
       return count + Math.max(explicitIssues, textIssues);
     }, 0);
@@ -718,6 +757,18 @@ export default function App() {
               <p className="text-[#44474E]">Grouped by Projects & Trials.</p>
             </div>
             <div className="flex gap-3">
+              <button 
+                onClick={() => {
+                  // If we have a Google Sheet URL, fetch from it
+                  // Otherwise, just trigger a re-render or show a message
+                  // For now, let's assume it refreshes from the source if available
+                  fetchFromGoogleSheet();
+                }}
+                className="flex items-center gap-2 bg-white text-gray-700 border border-gray-200 px-4 py-2 rounded-xl text-sm font-semibold hover:bg-gray-50 transition-all shadow-sm"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Refresh
+              </button>
               <button 
                 onClick={addSampleData}
                 className="flex items-center gap-2 bg-gray-100 text-gray-700 px-4 py-2 rounded-xl text-sm font-semibold hover:bg-gray-200 transition-all"
@@ -1047,16 +1098,21 @@ export default function App() {
                         const keywords = ['delay', 'issue', 'problem', 'fail', 'ng'];
                         
                         // Split status by lines or bullets to find individual issues
-                        const lines = (task.latestStatus || '').split(/\n|;|\./).filter(l => l.trim().length > 5);
+                        const lines = (task.latestStatus || '').split(/\n|;|\./).filter(l => l.trim().length > 5 && !l.includes('[SOLVED]'));
                         
                         return lines.filter(line => 
                           keywords.some(k => line.toLowerCase().includes(k))
-                        ).map((issueLine, idx) => ({
-                          task,
-                          issueLine,
-                          id: `${task.id}-${idx}`
-                        }));
-                      }).map(({ task, issueLine, id }) => (
+                        ).map((issueLine, idx) => {
+                          const trialMatch = issueLine.match(/T\d/i);
+                          const trial = trialMatch ? trialMatch[0].toUpperCase() : task.currentStage;
+                          return {
+                            task,
+                            issueLine,
+                            trial,
+                            id: `${task.id}-${idx}`
+                          };
+                        });
+                      }).map(({ task, issueLine, trial, id }) => (
                         <div key={id} className="p-6 bg-white rounded-3xl border border-[#E1E3E1] flex flex-col md:flex-row gap-6 items-start hover:shadow-md transition-shadow">
                           <div className="md:w-72 shrink-0">
                             <div className="flex flex-wrap gap-2 mb-2">
@@ -1067,7 +1123,7 @@ export default function App() {
                                 {task.partNo}
                               </span>
                               <span className="px-2 py-1 bg-amber-50 text-amber-700 rounded-lg text-[10px] font-bold uppercase">
-                                {task.currentStage}
+                                {trial}
                               </span>
                             </div>
                             <h4 className="font-bold text-sm text-[#1A1C1E] line-clamp-2">{task.projectDescription}</h4>
@@ -1112,7 +1168,10 @@ export default function App() {
                             >
                               Delete
                             </button>
-                            <button className="w-full py-2.5 bg-[#0061A4] text-white rounded-xl text-xs font-bold hover:bg-[#004A7D] transition-colors shadow-lg shadow-blue-100">
+                            <button 
+                              onClick={() => resolveIssue(task.id, issueLine)}
+                              className="w-full py-2.5 bg-[#0061A4] text-white rounded-xl text-xs font-bold hover:bg-[#004A7D] transition-colors shadow-lg shadow-blue-100"
+                            >
                               Resolve
                             </button>
                           </div>
@@ -1288,8 +1347,18 @@ export default function App() {
                       {format(parseISO(activeTimelinePoint.date), 'MMM dd, yyyy')}
                     </span>
                   </div>
-                  <h3 className="text-xl font-bold text-[#1A1C1E]">{activeTimelinePoint.task.projectDescription}</h3>
-                  <p className="text-xs text-gray-500 font-mono mt-1">{activeTimelinePoint.task.partNo}</p>
+                  <h3 className="text-xl font-bold text-[#1A1C1E]">
+                    {['beta', 'pilotrun', 'pilot', 'mp', 'xf'].includes(activeTimelinePoint.key.toLowerCase()) 
+                      ? activeTimelinePoint.task.project 
+                      : activeTimelinePoint.task.projectDescription
+                    }
+                  </h3>
+                  <p className="text-xs text-gray-500 font-mono mt-1">
+                    {['beta', 'pilotrun', 'pilot', 'mp', 'xf'].includes(activeTimelinePoint.key.toLowerCase()) 
+                      ? 'Project Overview' 
+                      : activeTimelinePoint.task.partNo
+                    }
+                  </p>
                 </div>
                 <button 
                   onClick={() => setActiveTimelinePoint(null)}
@@ -1303,35 +1372,70 @@ export default function App() {
                 <div className="bg-blue-50/50 p-6 rounded-2xl border border-blue-100">
                   <div className="flex items-center gap-2 mb-3">
                     <MessageSquare className="w-4 h-4 text-blue-600" />
-                    <span className="text-xs font-bold text-blue-700 uppercase tracking-wider">Latest Status</span>
+                    <span className="text-xs font-bold text-blue-700 uppercase tracking-wider">
+                      {['beta', 'pilotrun', 'pilot', 'mp', 'xf'].includes(activeTimelinePoint.key.toLowerCase()) ? 'Project Notes' : 'Latest Status'}
+                    </span>
                   </div>
-                  <div className="text-sm text-[#44474E] leading-relaxed whitespace-pre-wrap">
-                    {activeTimelinePoint.task.latestStatus || 'No status updates available for this part.'}
-                  </div>
+                  {['beta', 'pilotrun', 'pilot', 'mp', 'xf'].includes(activeTimelinePoint.key.toLowerCase()) ? (
+                    <textarea
+                      value={projectNotes[activeTimelinePoint.task.project] || ''}
+                      onChange={(e) => handleNoteChange(activeTimelinePoint.task.project, e.target.value)}
+                      className="w-full bg-white border border-blue-100 rounded-xl p-4 text-sm text-[#44474E] leading-relaxed resize-none focus:ring-2 focus:ring-blue-500 outline-none min-h-[180px] custom-scrollbar shadow-inner"
+                      placeholder="Add project notes, risks, or updates..."
+                    />
+                  ) : (
+                    <div className="text-sm text-[#44474E] leading-relaxed whitespace-pre-wrap">
+                      {activeTimelinePoint.task.latestStatus || 'No status updates available for this part.'}
+                    </div>
+                  )}
                 </div>
 
                 {activeTimelinePoint.task.issues && activeTimelinePoint.task.issues.length > 0 && (
                   <div>
                     <div className="flex items-center gap-2 mb-3 px-1">
                       <AlertCircle className="w-4 h-4 text-red-500" />
-                      <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Related Issues</span>
+                      <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                        {['t1', 't2', 't3', 't4', 't5'].includes(activeTimelinePoint.key.toLowerCase()) 
+                          ? `${activeTimelinePoint.key.toUpperCase()} Issues` 
+                          : 'Related Issues'
+                        }
+                      </span>
                     </div>
                     <div className="space-y-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
-                      {activeTimelinePoint.task.issues.map((issue, idx) => (
-                        <div key={idx} className="p-3 bg-white border border-[#F0F0F0] rounded-xl flex items-center justify-between gap-3">
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs text-[#44474E] truncate">{issue.description}</p>
+                      {activeTimelinePoint.task.issues
+                        .filter(issue => {
+                          const key = activeTimelinePoint.key.toLowerCase();
+                          if (['t1', 't2', 't3', 't4', 't5'].includes(key)) {
+                            return issue.trial?.toLowerCase() === key;
+                          }
+                          return true;
+                        })
+                        .map((issue, idx) => (
+                          <div key={idx} className="p-3 bg-white border border-[#F0F0F0] rounded-xl flex items-center justify-between gap-3">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs text-[#44474E] truncate">{issue.description}</p>
+                            </div>
+                            <span className={`shrink-0 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase ${
+                              issue.category === 'Function' ? 'bg-red-50 text-red-600' :
+                              issue.category === 'Cosmetic' ? 'bg-amber-50 text-amber-600' :
+                              issue.category === 'ECN' ? 'bg-purple-50 text-purple-600' :
+                              'bg-gray-50 text-gray-600'
+                            }`}>
+                              {issue.category}
+                            </span>
                           </div>
-                          <span className={`shrink-0 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase ${
-                            issue.category === 'Function' ? 'bg-red-50 text-red-600' :
-                            issue.category === 'Cosmetic' ? 'bg-amber-50 text-amber-600' :
-                            issue.category === 'ECN' ? 'bg-purple-50 text-purple-600' :
-                            'bg-gray-50 text-gray-600'
-                          }`}>
-                            {issue.category}
-                          </span>
+                        ))}
+                      {activeTimelinePoint.task.issues.filter(issue => {
+                        const key = activeTimelinePoint.key.toLowerCase();
+                        if (['t1', 't2', 't3', 't4', 't5'].includes(key)) {
+                          return issue.trial?.toLowerCase() === key;
+                        }
+                        return true;
+                      }).length === 0 && (
+                        <div className="text-center py-4 text-gray-400 text-[10px]">
+                          No issues found for this trial point.
                         </div>
-                      ))}
+                      )}
                     </div>
                   </div>
                 )}
@@ -1558,6 +1662,10 @@ function GanttChart({ tasks, onEdit, onUpdateTask, onPointClick }: { tasks: NPIT
                             dragMomentum={false}
                             whileDrag={{ scale: 1.3, zIndex: 50 }}
                             onDragEnd={(_, info) => handleDragEnd(projectTask, 'milestone', key, info)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onPointClick(projectTask, key, date);
+                            }}
                             className="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-red-600 rounded-full transform -translate-x-1/2 z-10 shadow-lg cursor-grab active:cursor-grabbing hover:scale-125 transition-all duration-200"
                             style={{ left: offset }}
                             title={`${key.toUpperCase()}: ${date} (Project Milestone)`}
